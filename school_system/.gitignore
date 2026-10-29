@@ -1,0 +1,13 @@
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+.cache/
+.runtime/
+**/node_modules/
+**/dist/
+**/target/
+*.log
+*.iml
+.DS_Store
