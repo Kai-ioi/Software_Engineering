@@ -25,7 +25,7 @@ async function submit() {
     <section class="login-form-side"><div class="login-card"><span class="eyebrow">欢迎回来</span><h2>登录课程工作空间</h2><p class="muted">使用课程账号，继续你的项目协作。</p>
       <el-form label-position="top" @submit.prevent="submit"><el-form-item label="账号"><el-input v-model="username" placeholder="请输入账号" autocomplete="username" size="large"/></el-form-item><el-form-item label="密码"><el-input v-model="password" placeholder="请输入密码" type="password" show-password autocomplete="current-password" size="large"/></el-form-item><el-alert v-if="error" :title="error" type="error" :closable="false" show-icon/><el-button class="login-submit" type="primary" size="large" native-type="submit" :loading="busy">进入工作空间<ArrowRight class="button-icon"/></el-button></el-form>
       <div class="login-note"><Lock/>你的课程身份与访问范围由课程授权决定</div>
-      <details v-if="demo" class="demo-help"><summary>本地演示账号</summary><p>教师 teacher01 · 学生 student01<br/>助教 assistant01 · 另一课程学生 student02<br/>管理员 admin01（默认没有课程权限）</p><p>初始密码：Demo@2026!<br/>设置过 DEMO_PASSWORD 时使用自定义密码。</p></details>
+      <details v-if="demo" class="demo-help"><summary>本地演示账号</summary><p>教师：郭立君 teacher01<br/>组长：石洁燃 student01<br/>组员：未宁夏 student03、陈爽 student05、汪欣芸 student06<br/>助教 assistant01 · 另一课程学生 student02<br/>独立团队学生 student04 · 管理员 admin01（默认没有课程权限）</p><p>初始密码：Demo@2026!<br/>设置过 DEMO_PASSWORD 时使用自定义密码。</p></details>
     </div><div class="login-copyright">课协 · COURSE COLLAB</div></section>
   </div>
 </template>

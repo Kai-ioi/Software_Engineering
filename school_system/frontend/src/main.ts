@@ -8,3 +8,5 @@ const app = createApp(App)
 for (const component of [ElButton, ElInput, ElForm, ElFormItem, ElTag, ElSelect, ElOption, ElEmpty, ElAlert, ElDialog, ElUpload]) app.use(component)
 app.config.errorHandler = () => { ElMessage.error('页面处理失败，请刷新后重试') }
 app.use(router).mount('#app')
+
+if (import.meta.env.DEV) void import('./devDemoPointer').then(m => m.installDemoPointer())

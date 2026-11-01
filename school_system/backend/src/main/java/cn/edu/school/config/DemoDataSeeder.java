@@ -17,8 +17,8 @@ public class DemoDataSeeder implements CommandLineRunner {
     }
     @Override @Transactional public void run(String...args){
         if(users.count()>0) return;
-        var teacher=users.save(new AppUser("teacher01","林老师",encoder.encode(password),false));
-        var student=users.save(new AppUser("student01","陈同学",encoder.encode(password),false));
+        var teacher=users.save(new AppUser("teacher01","郭立君",encoder.encode(password),false));
+        var student=users.save(new AppUser("student01","石洁燃",encoder.encode(password),false));
         var assistant=users.save(new AppUser("assistant01","周助教",encoder.encode(password),false));
         var outsider=users.save(new AppUser("student02","李同学",encoder.encode(password),false));
         users.save(new AppUser("admin01","平台管理员",encoder.encode(password),true));
