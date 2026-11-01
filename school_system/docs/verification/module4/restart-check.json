@@ -1,0 +1,25 @@
+{
+  "restartPersistenceCheck": "passed",
+  "workspaces": [
+    {
+      "teamId": 1,
+      "versionCount": 4,
+      "finalVersionId": 5,
+      "reviewBindingId": null
+    },
+    {
+      "teamId": 33,
+      "versionCount": 3,
+      "finalVersionId": 3,
+      "reviewBindingId": 3
+    }
+  ],
+  "backendTests": {
+    "total": 53,
+    "failures": 0,
+    "errors": 0,
+    "newModule4Tests": 22
+  },
+  "frontendBuild": "passed",
+  "requirementsSha256": "9bde29ea615bbcf3a88150084659e457f944ce3fcdd1979d7f40a05454bf0b95"
+}
