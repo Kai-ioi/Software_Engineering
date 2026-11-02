@@ -12,6 +12,7 @@ const router = createRouter({ history: createWebHistory(), routes: [
     { path: 'courses/:courseId/projects/:projectId/teams/:teamId', component: () => import('../views/TeamDetailView.vue'), meta: { title: '团队详情' } },
     { path: 'modules/tasks', component: () => import('../views/CollaborationView.vue'), meta: { title: '迭代与任务' } },
     { path: 'modules/submissions', component: () => import('../views/SubmissionsView.vue'), meta: { title: '成果与版本' } },
+    { path: 'modules/reviews', component: () => import('../views/ReviewView.vue'), meta: { title: '检查与互评' } },
     { path: 'modules/:module', component: () => import('../views/ModuleView.vue'), meta: { title: '业务模块' } }
   ] },
   { path: '/:pathMatch(.*)*', component: () => import('../views/NotFoundView.vue'), meta: { public: true } }
