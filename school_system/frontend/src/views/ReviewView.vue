@@ -36,7 +36,14 @@ onMounted(async () => {
 async function loadReview() {
   if (!courseId.value) return
   rw.value = undefined; projectId.value = undefined
-  try { rProjects.value = await getReviewProjects(courseId.value); if (rProjects.value.length) { projectId.value = rProjects.value[0]!.id; await loadReviewWorkspace() } } catch { failed.value = true }
+  try {
+    rProjects.value = await getReviewProjects(courseId.value)
+    if (rProjects.value.length) {
+      const preferred = rProjects.value.find(p => p.myPendingTasks > 0) || rProjects.value.find(p => p.bindingCount > 0) || rProjects.value[0]
+      projectId.value = preferred!.id
+      await loadReviewWorkspace()
+    }
+  } catch { failed.value = true }
 }
 async function loadReviewWorkspace() {
   if (!projectId.value) return
@@ -165,7 +172,7 @@ const bytes = (n: number | null | undefined) => `${((n || 0) / 1024 / 1024).toFi
       <div class="submission-selectors"><label>项目 <el-select v-model="projectId" :disabled="busy || loading || !rProjects.length" @change="loadReviewWorkspace"><el-option v-for="p in rProjects" :key="p.id" :value="p.id" :label="`${p.name} · ${p.bindingCount} 个被评版本`"/></el-select></label><el-button v-if="rw?.isTeacher" type="primary" :disabled="busy || loading" @click="openRound">创建互评批次</el-button></div>
       <el-empty v-if="!rw" description="暂无可用项目"/>
       <template v-else>
-        <el-alert v-if="rw.project.demo_fixture" type="info" :closable="false" title="当前为演示项目，已为三个团队准备好被评版本，可直接创建批次并自动分配。"/>
+        <el-alert v-if="rw.project.demo_fixture" type="info" :closable="false" title="已为各团队确认被评版本，可直接创建互评批次并自动分配。"/>
         <!-- 学生：我的互评待办 -->
         <template v-if="rw.isStudent">
           <section class="submission-panel" v-if="rw.myTasks.length">
@@ -196,7 +203,7 @@ const bytes = (n: number | null | undefined) => `${((n || 0) / 1024 / 1024).toFi
           <el-alert v-if="!rw.bindings.length" type="warning" :closable="false" title="暂无已确认的被评版本。请先到“成果与版本”模块确认各团队被评版本，再创建互评批次。"/>
           <section class="submission-panel">
             <h3>互评批次</h3>
-            <el-empty v-if="!rw.rounds.length" description="尚未创建互评批次"/>
+            <el-empty v-if="!rw.rounds.length" description="尚未创建互评批次"><el-button type="primary" :disabled="busy || loading" @click="openRound">创建互评批次</el-button></el-empty>
             <article v-for="r in rw.rounds" :key="r.id" class="record-card">
               <div class="submission-bar"><strong>#{{ r.id }} · {{ r.name }}</strong><div><el-tag size="small">{{ roundStatus[r.status] }}</el-tag><el-tag size="small" :type="r.feedback_open ? 'success' : 'info'">{{ r.feedback_open ? '反馈已开放' : '反馈未开放' }}</el-tag></div></div>
               <p class="muted">截止 {{ stamp(r.deadline) }}（北京时间） · 已提交 {{ r.submitted_count }} / 共 {{ r.task_count }} 项</p>
@@ -237,7 +244,7 @@ const bytes = (n: number | null | undefined) => `${((n || 0) / 1024 / 1024).toFi
       <div class="submission-selectors"><label>团队 <el-select v-model="teamId" :disabled="busy || loading || !iTeams.length" @change="loadInspectionWorkspace"><el-option v-for="t in iTeams" :key="t.id" :value="t.id" :label="`${t.project_name} / ${t.name}`"/></el-select></label><el-button v-if="iw?.isTA" type="primary" :disabled="busy || loading || !iw?.versions.length" @click="openInspect()">新建检查</el-button></div>
       <el-empty v-if="!iw" description="暂无可检查的团队"/>
       <template v-else>
-        <el-alert v-if="iw.team && iw.project.demo_fixture" type="info" :closable="false" title="演示团队。助教可针对具体版本记录检查结论与整改反馈。"/>
+        <el-alert v-if="iw.team && iw.project.demo_fixture" type="info" :closable="false" title="助教可针对具体版本记录检查结论与整改反馈。"/>
         <div class="submission-header" v-if="iw.team"><h2>{{ iw.team.name }}</h2><p class="muted">{{ iw.project.name }} · {{ projectStatusNames[iw.project.status] }}</p></div>
         <p v-if="iw.isTeacher" class="muted submission-note">教师可查看助教检查与问题上报，评分请使用“评分与成绩”模块。</p>
         <p v-else-if="iw.isStudent" class="muted submission-note">你可查看本团队收到的检查结论与整改反馈；整改材料由负责人正式重交。</p>
