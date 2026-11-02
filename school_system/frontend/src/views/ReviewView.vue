@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElTable, ElTableColumn, ElTabs, ElTabPane, ElCheckbox } from 'element-plus'
 import { getCourses, type Course } from '../api/courses'
 import { projectStatusNames } from '../api/collaboration'
 import { ApiError } from '../api/http'
