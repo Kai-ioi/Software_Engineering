@@ -10,6 +10,8 @@ const router = createRouter({ history: createWebHistory(), routes: [
     { path: 'courses/:courseId/projects/:projectId', component: () => import('../views/ProjectDetailView.vue'), meta: { title: '项目详情' } },
     { path: 'courses/:courseId/projects/:projectId/teams', component: () => import('../views/TeamsView.vue'), meta: { title: '团队与成员' } },
     { path: 'courses/:courseId/projects/:projectId/teams/:teamId', component: () => import('../views/TeamDetailView.vue'), meta: { title: '团队详情' } },
+    { path: 'modules/tasks', component: () => import('../views/CollaborationView.vue'), meta: { title: '迭代与任务' } },
+    { path: 'modules/submissions', component: () => import('../views/SubmissionsView.vue'), meta: { title: '成果与版本' } },
     { path: 'modules/:module', component: () => import('../views/ModuleView.vue'), meta: { title: '业务模块' } }
   ] },
   { path: '/:pathMatch(.*)*', component: () => import('../views/NotFoundView.vue'), meta: { public: true } }
