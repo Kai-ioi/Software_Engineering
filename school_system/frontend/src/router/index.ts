@@ -13,6 +13,7 @@ const router = createRouter({ history: createWebHistory(), routes: [
     { path: 'modules/tasks', component: () => import('../views/CollaborationView.vue'), meta: { title: '迭代与任务' } },
     { path: 'modules/submissions', component: () => import('../views/SubmissionsView.vue'), meta: { title: '成果与版本' } },
     { path: 'modules/reviews', component: () => import('../views/ReviewView.vue'), meta: { title: '检查与互评' } },
+    { path: 'modules/grades', component: () => import('../views/GradesView.vue'), meta: { title: '评分与成绩' } },
     { path: 'modules/:module', component: () => import('../views/ModuleView.vue'), meta: { title: '业务模块' } }
   ] },
   { path: '/:pathMatch(.*)*', component: () => import('../views/NotFoundView.vue'), meta: { public: true } }
