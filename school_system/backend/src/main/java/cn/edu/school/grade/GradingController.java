@@ -41,6 +41,11 @@ public class GradingController {
     @PostMapping("/results/{result}/correct")
     public ApiResponse<?> correct(@AuthenticationPrincipal UserPrincipal u, @PathVariable long result, @RequestBody GradingService.CorrectInput in){ return ApiResponse.ok(service.correct(u.id(), result, in)); }
 
+    @GetMapping("/results/{id}/evidence")
+    public ApiResponse<?> evidence(@AuthenticationPrincipal UserPrincipal user,@PathVariable long id) {
+        return ApiResponse.ok(service.evidence(user.id(),id));
+    }
+
     @GetMapping("/my")
     public ApiResponse<?> myGrades(@AuthenticationPrincipal UserPrincipal u){ return ApiResponse.ok(service.myGrades(u.id())); }
 

@@ -1,16 +1,29 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { request } from '../api/http'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, User, List } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { auth } from '../stores/auth'
-import { getTeams, getTeam, applyTeam, approveMember, rejectMember, leaveTeam, removeMember, transferLeadership, transferMember, type Team } from '../api/teams'
+import { getTeams, getTeam, applyTeam, approveMember, rejectMember, leaveTeam, removeMember, transferLeadership, transferMember, decideExit, assignStudent, type Team } from '../api/teams'
 
 const route = useRoute(); const router = useRouter()
 const courseId = Number(route.params.courseId)
 const projectId = Number(route.params.projectId)
 const teamId = Number(route.params.teamId)
 const team = ref<Team | null>(null)
+const assistants = ref<{ id: number; display_name: string; granted: boolean }[]>([])
+const scopePath = `/inspections/teams/${teamId}/assistant-scope`
+const scopeOpen = ref(false)
+async function showScope() {
+  try { assistants.value = await request(scopePath); scopeOpen.value = true } catch {}
+}
+async function setScope(id: number, granted: boolean) {
+  try {
+    await request(`${scopePath}/${id}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({granted})})
+    await showScope()
+  } catch {}
+}
 const allTeams = ref<Team[]>([])
 const loading = ref(true); const failed = ref(false)
 const acting = ref(false)
@@ -41,8 +54,17 @@ async function run(fn: () => Promise<Team>) {
 
 function apply() { run(() => applyTeam(courseId, projectId, teamId)) }
 function quit() {
-  ElMessageBox.confirm('确认退出该团队？', '退出团队', { type: 'warning' })
+  ElMessageBox.confirm('提交退出申请后，审批通过前仍是团队成员。', '申请退出', { type: 'warning' })
     .then(() => run(() => leaveTeam(courseId, projectId, teamId))).catch(() => {})
+}
+function exitDecision(memberId: number, approved: boolean) {
+  void run(() => decideExit(courseId, projectId, teamId, memberId, approved))
+}
+async function assign() {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入本课程学生的用户编号', '教师分配学生', { inputPattern: /^[1-9][0-9]*$/, inputErrorMessage: '请输入有效编号' })
+    await run(() => assignStudent(courseId, projectId, teamId, Number(value)))
+  } catch {}
 }
 function approve(memberId: number) { run(() => approveMember(courseId, projectId, teamId, memberId)) }
 function reject(memberId: number) { run(() => rejectMember(courseId, projectId, teamId, memberId)) }
@@ -87,7 +109,11 @@ const statusText = (): string => team.value ? (team.value.full ? '已满员' : t
             </div>
             <div v-if="team.canManage && m.userId !== team.leaderId" class="member-actions">
               <el-button text type="primary" size="small" :loading="acting" @click="handover(m.userId)">设为负责人</el-button>
-              <el-button text type="danger" size="small" :loading="acting" @click="remove(m.id)">移出</el-button>
+              <template v-if="m.exitRequested">
+                <el-button text type="primary" @click="exitDecision(m.id, true)">批准退出</el-button>
+                <el-button text @click="exitDecision(m.id, false)">驳回退出</el-button>
+              </template>
+              <el-button v-if="team.myRole === 'TEACHER'" text type="danger" size="small" :loading="acting" @click="remove(m.id)">移出</el-button>
               <el-button v-if="team.myRole === 'TEACHER'" text size="small" :loading="acting" @click="openTransfer(m.id)">转组</el-button>
             </div>
           </div>
@@ -108,11 +134,22 @@ const statusText = (): string => team.value ? (team.value.full ? '已满员' : t
       </div>
 
       <div class="detail-actions">
-        <el-button v-if="!isMember() && !isPending() && !team.full" type="primary" :loading="acting" @click="apply">申请加入</el-button>
+        <el-button v-if="team.myRole === 'STUDENT' && team.groupingOpen && !isMember() && !isPending() && !team.full" type="primary" :loading="acting" @click="apply">申请加入</el-button>
         <el-tag v-else-if="isPending()" type="info">申请已提交，等待负责人审批</el-tag>
-        <el-button v-if="isMember() && !isLeader()" type="warning" :loading="acting" @click="quit">退出团队</el-button>
+        <el-button v-if="team.myRole === 'TEACHER' && !team.full" @click="assign">分配学生</el-button>
+        <el-tag v-if="team.members.some(m => m.userId === me() && m.exitRequested)">退出申请待处理</el-tag>
+        <el-button v-else-if="team.groupingOpen && isMember() && !isLeader()" type="warning" :loading="acting" @click="quit">申请退出</el-button>
       </div>
     </div>
+    <el-button v-if="team.myRole === 'TEACHER'" @click="showScope">助教检查授权</el-button>
+    <el-dialog v-model="scopeOpen" title="本团队的助教授权">
+      <el-table :data="assistants" empty-text="本课程暂无助教">
+        <el-table-column prop="display_name" label="助教"/>
+        <el-table-column label="授权"><template #default="{row}">
+          <el-button @click="setScope(row.id,!row.granted)">{{ row.granted ? '撤销授权' : '授予检查权限' }}</el-button>
+        </template></el-table-column>
+      </el-table>
+    </el-dialog>
   </template>
 
   <el-dialog v-model="showTransfer" title="成员转组" width="min(420px, 92vw)" destroy-on-close>

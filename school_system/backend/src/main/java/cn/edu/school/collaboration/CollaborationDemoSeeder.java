@@ -37,6 +37,11 @@ public class CollaborationDemoSeeder {
         jdbc.update("INSERT INTO project_team(project_id,name,leader_id) VALUES(?,?,?)",project,"独立团队（演示）",other);
         long otherTeam=jdbc.queryForObject("SELECT id FROM project_team WHERE project_id=? AND leader_id=?",Long.class,project,other);
         jdbc.update("INSERT INTO project_team_member(team_id,user_id) VALUES(?,?)",otherTeam,other);
+        jdbc.update("""
+            INSERT INTO assistant_team_scope(team_id,user_id)
+            SELECT t.id,m.user_id FROM project_team t JOIN course_membership m ON m.course_id=?
+            WHERE t.project_id=? AND m.role='TA' AND m.active=TRUE
+            """,course,project);
     }
     private long account(String username,String name){return users.findByUsername(username).orElseGet(()->users.save(new AppUser(username,name,encoder.encode(password),false))).getId();}
 }

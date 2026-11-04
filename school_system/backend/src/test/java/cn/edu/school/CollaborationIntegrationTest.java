@@ -34,6 +34,7 @@ class CollaborationIntegrationTest {
         requirement=db.queryForObject("SELECT MAX(id) FROM project_requirement",Long.class);
         db.update("INSERT INTO project_team(project_id,name,leader_id) VALUES(?,'测试团队',?)",project,leader);
         team=db.queryForObject("SELECT MAX(id) FROM project_team",Long.class);
+        db.update("INSERT INTO assistant_team_scope(team_id,user_id) VALUES(?,?)",team,who("assistant01").id());
         db.update("INSERT INTO project_team_member(team_id,user_id) VALUES(?,?),(?,?)",team,leader,team,member);
     }
     UserPrincipal who(String name){return UserPrincipal.from(users.findByUsername(name).orElseThrow());}

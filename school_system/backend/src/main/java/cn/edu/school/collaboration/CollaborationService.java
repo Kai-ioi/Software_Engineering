@@ -38,6 +38,7 @@ public class CollaborationService {
     private Context context(long userId,long teamId,boolean lock) {
         var team=gateway.team(teamId,lock); var project=gateway.project(number(team,"project_id"));
         var role=permission.requireMember(userId,number(project,"course_id"));
+        permission.requireTeamScope(role,userId,teamId);
         boolean member=gateway.member(teamId,userId);
         if(role==CourseRole.STUDENT && !member) forbidden("只能查看本团队的迭代、任务和过程记录");
         return new Context(team,project,role,userId,role==CourseRole.STUDENT && member && number(team,"leader_id")==userId);
@@ -49,6 +50,7 @@ public class CollaborationService {
             FROM project_team t JOIN course_project p ON p.id=t.project_id WHERE p.course_id=?
             """;
         if(role==CourseRole.STUDENT) return jdbc.queryForList(sql+" AND EXISTS(SELECT 1 FROM project_team_member m WHERE m.team_id=t.id AND m.user_id=? AND m.active=TRUE) ORDER BY t.id",courseId,userId);
+        if(role==CourseRole.TA)return jdbc.queryForList(sql+CoursePermission.ASSISTANT_TEAM_FILTER+" ORDER BY t.id",courseId,userId);
         return jdbc.queryForList(sql+" ORDER BY t.id",courseId);
     }
     @Transactional
@@ -130,7 +132,11 @@ public class CollaborationService {
         validText(in.title,200,"任务名称");validText(in.description,2000,"任务内容");dates(in.plannedStart,in.plannedEnd,c,iteration);
         if(id==null) id=insert("INSERT INTO team_task(team_id,iteration_id,original_iteration_id,requirement_id,title,description,assignee_id,planned_start,planned_end) VALUES(?,?,?,?,?,?,?,?,?)",team,in.iterationId,in.iterationId,in.requirementId,in.title.strip(),in.description.strip(),in.assigneeId,in.plannedStart,in.plannedEnd);
         else jdbc.update("UPDATE team_task SET requirement_id=?,title=?,description=?,assignee_id=?,planned_start=?,planned_end=? WHERE id=?",in.requirementId,in.title.strip(),in.description.strip(),in.assigneeId,in.plannedStart,in.plannedEnd,id);
-        event(c,"TASK_SAVED","TASK",id,in.reason,old,object("team_task",id,team));return id;
+        var saved=object("team_task",id,team);
+        event(c,"TASK_SAVED","TASK",id,in.reason,old,saved);
+        if(saved.get("assignee_id")!=null&&!Objects.equals(old.get("assignee_id"),saved.get("assignee_id")))
+            audit.append(c.userId,c.courseId(),"TEAM_TASK_ASSIGNED","task:"+id+":"+saved.get("assignee_id"),"团队任务分配");
+        return id;
     }
     public record ProgressInput(long revision,String reason,String status,String note){}
     @Transactional

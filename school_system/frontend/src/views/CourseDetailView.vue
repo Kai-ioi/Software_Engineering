@@ -4,15 +4,26 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, FolderOpened, User, List, Document, ChatDotRound, Medal, Upload } from '@element-plus/icons-vue'
 import { getCourse, getManagement, getAudit, roleName, type Course, type Audit } from '../api/courses'
 import { request } from '../api/http'
+import { getProjects } from '../api/projects'
 import type { UploadRequestOptions } from 'element-plus'
 const route = useRoute(); const router = useRouter(); const course = ref<Course | null>(null)
 const failed = ref(false); const loading = ref(true); const count = ref<number | null>(null)
 const logs = ref<Audit[]>([]); const showLogs = ref(false); const logsLoading = ref(false)
 const uploaded = ref<{ id: string; name: string }[]>([]); const uploading = ref(false)
 const modules = [ { key: 'projects', title: '课程项目', desc: '项目要求与交付安排', icon: FolderOpened }, { key: 'teams', title: '团队成员', desc: '组队申请与成员管理', icon: User }, { key: 'tasks', title: '迭代与任务', desc: '迭代计划与任务进展', icon: List }, { key: 'submissions', title: '成果与版本', desc: '正式提交与最终版本', icon: Document }, { key: 'reviews', title: '检查与互评', desc: '过程检查与评审反馈', icon: ChatDotRound }, { key: 'grades', title: '评分与成绩', desc: '评分、发布与结果查询', icon: Medal } ]
-function openModule(m: { key: string }) {
-  if (m.key === 'projects' && course.value) router.push(`/courses/${course.value.id}/projects`)
-  else router.push({ path: `/modules/${m.key}`, query: { courseId: course.value?.id } })
+async function openModule(m: { key: string }) {
+  if (!course.value) return
+  const id = course.value.id
+  if (m.key === 'projects') { await router.push(`/courses/${id}/projects`); return }
+  if (m.key === 'teams') {
+    try {
+      const projects = await getProjects(id)
+      if (projects.length === 1) { await router.push(`/courses/${id}/projects/${projects[0]!.id}/teams`); return }
+      await router.push(`/courses/${id}/projects`)
+    } catch {}
+    return
+  }
+  await router.push({ path: `/modules/${m.key}`, query: { courseId: id } })
 }
 onMounted(async () => {
   try { course.value = await getCourse(Number(route.params.id)); if (course.value.myRole === 'TEACHER') count.value = (await getManagement(course.value.id)).studentCount }

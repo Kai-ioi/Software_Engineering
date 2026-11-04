@@ -3,7 +3,7 @@ import { computed, onMounted, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElInputNumber } from 'element-plus'
 import { getCourses, type Course } from '../api/courses'
-import { getOverview, getTeamSheet, saveDraft, submit, modify, getSummary, confirmRoster, publish, correct, getMyGrades, exportUrl, type Overview, type TeamSheet, type ScoreItem, type Summary, type SummaryTeam, type MyGrade } from '../api/grades'
+import { getOverview, getTeamSheet, saveDraft, submit, modify, getSummary, confirmRoster, publish, correct, getMyGrades, getGradeEvidence, type GradeEvidence, exportUrl, type Overview, type TeamSheet, type ScoreItem, type Summary, type SummaryTeam, type MyGrade } from '../api/grades'
 import { ApiError } from '../api/http'
 
 const route = useRoute(); const router = useRouter()
@@ -15,12 +15,23 @@ const modifyOpen = ref(false); const reason = ref('')
 const tab = ref<'grading' | 'summary'>('grading')
 
 const summary = ref<Summary>(); const myGrades = ref<MyGrade>()
+const evidence = ref<GradeEvidence>()
+const evidenceOpen = ref(false)
+async function showEvidence(id: number) {
+  try { evidence.value = await getGradeEvidence(id); evidenceOpen.value = true } catch {}
+}
+function decoded(value: string | null) {
+  if (!value) return '无记录'
+  try { return JSON.stringify(JSON.parse(value), null, 2) } catch { return value }
+}
+const publishTarget = ref<SummaryTeam>()
+function openPublish(target?: SummaryTeam) { publishTarget.value = target; publishReason.value = ''; publishOpen.value = true }
 const publishOpen = ref(false); const publishReason = ref('')
 const correctTarget = ref<SummaryTeam>(); const correctOpen = ref(false); const correctReason = ref('')
 
 const teacher = computed(() => overview.value?.role === 'TEACHER')
-const total = computed(() => (overview.value?.criteria || []).reduce((s, c) => s + (scores[c.id] || 0), 0))
-const fullScore = computed(() => (overview.value?.criteria || []).reduce((s, c) => s + c.max_score, 0) || 0)
+const total = computed(() => (sheet.value?.criteria || []).reduce((s, c) => s + (scores[c.id] || 0), 0))
+const fullScore = computed(() => (sheet.value?.criteria || []).reduce((s, c) => s + c.max_score, 0) || 0)
 const submitted = computed(() => sheet.value?.sheet?.status === 'SUBMITTED')
 const stamp = (v?: string | null) => v ? new Date(v).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '—'
 const sheetStatusName = (s?: string | null) => s === 'SUBMITTED' ? '已提交' : s === 'DRAFT' ? '草稿' : '未评分'
@@ -63,17 +74,17 @@ async function switchTab(next: 'grading' | 'summary') {
 }
 
 function collect(): ScoreItem[] {
-  return (overview.value?.criteria || []).map(c => ({ criterionId: c.id, score: scores[c.id] ?? 0 }))
+  return (sheet.value?.criteria || []).flatMap(c => scores[c.id] == null ? [] : [{ criterionId: c.id, score: scores[c.id] }])
 }
 async function save(submitMode: boolean) {
   if (!teamId.value || !overview.value || busy.value) return
-  if (submitMode && overview.value.criteria.some(c => scores[c.id] === undefined)) {
+  if (submitMode && sheet.value!.criteria.some(c => scores[c.id] === undefined)) {
     ElMessage.warning('请完成所有维度的评分后再提交'); return
   }
   busy.value = true
   try {
-    if (submitMode) await submit(teamId.value, overview.value.rubric.id, collect())
-    else await saveDraft(teamId.value, overview.value.rubric.id, collect())
+    if (submitMode) await submit(teamId.value, sheet.value!.rubric.id, collect())
+    else await saveDraft(teamId.value, sheet.value!.rubric.id, collect())
     ElMessage.success(submitMode ? '评分已正式提交' : '草稿已保存')
     await loadTeam()
   } catch (e) { if (e instanceof ApiError && e.status === 409) await loadTeam() } finally { busy.value = false }
@@ -95,7 +106,7 @@ async function doConfirmRoster(t: SummaryTeam) {
 async function doPublish() {
   if (!courseId.value || !publishReason.value.trim()) { ElMessage.warning('请填写发布说明'); return }
   busy.value = true
-  try { const r = await publish(courseId.value, publishReason.value.trim()); ElMessage.success(`已发布 ${r.publishedTeams} 个团队的成绩`); publishOpen.value = false; publishReason.value = ''; await loadSummary() } catch { /* handled */ } finally { busy.value = false }
+  try { const r = await publish(courseId.value, publishReason.value.trim(), publishTarget.value?.team_id); ElMessage.success(`已发布 ${r.publishedTeams} 个团队的成绩`); publishOpen.value = false; publishReason.value = ''; await loadSummary() } catch { /* handled */ } finally { busy.value = false }
 }
 function openCorrect(t: SummaryTeam) { correctTarget.value = t; correctReason.value = ''; correctOpen.value = true }
 async function doCorrect() {
@@ -156,7 +167,7 @@ onMounted(async () => {
             </article>
             <article class="grade-panel">
               <h3>评分维度</h3>
-              <div v-for="c in overview!.criteria" :key="c.id" class="criterion-row">
+              <div v-for="c in sheet!.criteria" :key="c.id" class="criterion-row">
                 <div class="criterion-info"><strong>{{ c.name }}</strong><p class="muted">{{ c.description }}</p></div>
                 <el-input-number v-model="scores[c.id]" :min="0" :max="c.max_score" :disabled="busy || loading || submitted" aria-label="维度得分"/>
                 <span class="criterion-max">/ {{ c.max_score }}</span>
@@ -179,9 +190,9 @@ onMounted(async () => {
         <el-alert v-else-if="failed" type="error" title="加载失败，请检查服务连接并重试" :closable="false"/>
         <template v-else-if="summary">
           <div class="summary-bar">
-            <div><p class="muted">教师权重 {{ summary.rubric.teacher_weight }}% · 互评权重 {{ summary.rubric.peer_weight }}%</p></div>
+            <div><p class="muted">各团队采用所属项目发布的评分维度和成绩权重</p></div>
             <div class="grade-actions">
-              <el-button :disabled="busy || loading || !canPublishAll" type="primary" @click="publishOpen = true">发布全部成绩</el-button>
+              <el-button :disabled="busy || loading || !canPublishAll" type="primary" @click="openPublish()">发布全部成绩</el-button>
               <a :href="exportUrl(courseId!, 'csv')" class="download">导出 CSV</a>
               <a :href="exportUrl(courseId!, 'xlsx')" class="download">导出 XLSX</a>
             </div>
@@ -198,6 +209,8 @@ onMounted(async () => {
             </template></el-table-column>
             <el-table-column label="操作" width="220"><template #default="{ row }">
               <el-button link :disabled="busy || loading || row.roster_id" @click="doConfirmRoster(row)">{{ row.roster_id ? '名单已核对' : '核对计分名单' }}</el-button>
+              <el-button v-if="!row.published && row.exceptions.length === 0" link type="primary" @click="openPublish(row)">发布该队</el-button>
+              <el-button v-if="row.published" link @click="showEvidence(row.published.id)">计分依据</el-button>
               <el-button v-if="row.published" link type="warning" :disabled="busy || loading" @click="openCorrect(row)">更正</el-button>
             </template></el-table-column>
           </el-table>
@@ -218,6 +231,7 @@ onMounted(async () => {
       <el-table-column label="互评均分" width="100" align="center" prop="peer_total"/>
       <el-table-column label="最终总分" width="100" align="center"><template #default="{ row }"><strong>{{ row.final_total }}</strong></template></el-table-column>
       <el-table-column label="状态" width="110" align="center"><template #default="{ row }"><el-tag :type="row.status === 'CORRECTED' ? 'warning' : 'success'" size="small">{{ row.status === 'CORRECTED' ? '已更正' : '已发布' }}</el-tag></template></el-table-column>
+      <el-table-column label="被评成果" width="110"><template #default="{row}">{{ row.evaluated_version_no == null ? '—' : 'v' + row.evaluated_version_no }}</template></el-table-column>
       <el-table-column label="发布时间" min-width="160"><template #default="{ row }">{{ stamp(row.published_at) }}</template></el-table-column>
     </el-table>
   </template>
@@ -228,10 +242,19 @@ onMounted(async () => {
     <template #footer><el-button :disabled="busy" @click="modifyOpen = false">取消</el-button><el-button type="primary" :loading="busy" @click="doModify">确认修改</el-button></template>
   </el-dialog>
 
-  <el-dialog v-model="publishOpen" title="发布全部成绩" width="min(520px, 92vw)" :close-on-click-modal="false">
-    <p class="muted">发布前系统会校验：每个团队均已有被评版本、教师评分已提交、互评已完成、名单已核对。</p>
+  <el-dialog v-model="publishOpen" :title="publishTarget ? `发布 ${publishTarget.team_name} 的成绩` : '发布全部成绩'" width="min(520px, 92vw)" :close-on-click-modal="false">
+    <p class="muted">发布前校验所选团队的被评版本、正权重评分来源及计分名单。</p>
     <el-input v-model="publishReason" type="textarea" :rows="3" maxlength="2000" placeholder="发布说明"/>
     <template #footer><el-button :disabled="busy" @click="publishOpen = false">取消</el-button><el-button type="primary" :loading="busy" @click="doPublish">确认发布</el-button></template>
+  </el-dialog>
+
+  <el-dialog v-model="evidenceOpen" title="已发布成绩的计分依据" width="min(720px, 92vw)">
+    <template v-if="evidence">
+      <p>成绩 v{{ evidence.version_no }} · 被评成果 v{{ evidence.evaluated_version_no ?? '—' }}（编号 {{ evidence.evaluated_version_id ?? '—' }}）</p>
+      <el-button v-if="evidence.parent_id" link @click="showEvidence(evidence.parent_id)">查看上一版成绩依据</el-button>
+      <h4>教师评分记录</h4><pre style="white-space: pre-wrap">{{ decoded(evidence.score_snapshot) }}</pre>
+      <h4>有效互评记录</h4><pre style="white-space: pre-wrap">{{ decoded(evidence.peer_snapshot) }}</pre>
+    </template>
   </el-dialog>
 
   <el-dialog v-model="correctOpen" title="成绩更正" width="min(520px, 92vw)" :close-on-click-modal="false">

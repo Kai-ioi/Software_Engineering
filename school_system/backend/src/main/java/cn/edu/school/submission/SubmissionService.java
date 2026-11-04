@@ -41,6 +41,7 @@ public class SubmissionService {
     private static void text(String value,int max,String name){check(value!=null&&!value.isBlank()&&value.length()<=max,"INVALID_SUBMISSION",name+"不能为空且不超过"+max+"字");}
     private Context context(long user,long team,boolean lock){
         var tr=gateway.team(team,lock);var p=gateway.project(n(tr,"project_id"));var role=permission.requireMember(user,n(p,"course_id"));
+        permission.requireTeamScope(role,user,team);
         boolean member=gateway.member(team,user);
         if(role==CourseRole.STUDENT&&!member)deny("只能管理和查看本团队成果");
         return new Context(user,tr,p,role,member);
@@ -152,7 +153,7 @@ public class SubmissionService {
         long id=insert("INSERT INTO submission_version(package_id,team_id,iteration_id,version_no,submitted_by,summary,accepted_at,deadline_snapshot,late,extension_id,total_bytes,request_key,payload_hash,receipt_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",pkg,team,in.iterationId,seq,user,in.summary.strip(),accepted,t(c.project.get("final_deadline")),accepted.isAfter(t(c.project.get("final_deadline"))),extension==null?null:n(extension,"id"),total,in.requestKey,hash,receipt);
         for(var m:materials)db.update("INSERT INTO submission_version_material(version_id,kind,file_id,title,url,code_link,code_ref,size_bytes,sha256) VALUES(?,?,?,?,?,?,?,?,?)",id,m.get("kind"),m.get("file_id"),m.get("title"),m.get("url"),m.get("code_link"),m.get("code_ref"),m.get("file_id")==null?0:n(m,"size_bytes"),m.get("sha256"));
         db.update("UPDATE submission_package SET current_version_id=? WHERE id=?",id,pkg);
-        event(c,"VERSION_SUBMITTED","version:"+id,"负责人正式提交，保留历史及真实受理时间",Map.of(),Map.of("versionId",id,"versionNo",seq,"receipt",receipt,"late",extension!=null),true,true);
+        event(c,"VERSION_SUBMITTED","version:"+id,"负责人正式提交，保留历史及真实受理时间",Map.of(),Map.of("versionId",id,"versionNo",seq,"receipt",receipt,"late",accepted.isAfter(t(c.project.get("final_deadline")))),true,true);
         return versionDetail(c,id);
     }
     public record SelectionInput(long revision,Long versionId,String reason,boolean accessibleConfirmed,boolean reassessmentRequired){}
@@ -212,7 +213,7 @@ public class SubmissionService {
     public Map<String,Object> receipt(long user,long team,UUID key){var c=context(user,team,false);var v=one("SELECT id FROM submission_version WHERE team_id=? AND request_key=?","RECEIPT_NOT_FOUND",team,key);return versionDetail(c,n(v,"id"));}
     public Map<String,Object> detail(long user,long team,long id){return versionDetail(versionContext(user,team,id),id);}
     private Context versionContext(long user,long team,long version){
-        var tr=gateway.team(team,false);var p=gateway.project(n(tr,"project_id"));var role=permission.requireMember(user,n(p,"course_id"));boolean member=gateway.member(team,user);
+        var tr=gateway.team(team,false);var p=gateway.project(n(tr,"project_id"));var role=permission.requireMember(user,n(p,"course_id"));permission.requireTeamScope(role,user,team);boolean member=gateway.member(team,user);
         if(role==CourseRole.STUDENT&&!member){
             long count=db.queryForObject("SELECT COUNT(*) FROM submission_review_access a JOIN submission_review_binding b ON b.id=a.binding_id WHERE b.team_id=? AND b.version_id=? AND a.reviewer_id=? AND a.active=TRUE",Long.class,team,version,user);
             if(count==0)deny("没有访问该成果版本的权限");

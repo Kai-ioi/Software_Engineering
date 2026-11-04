@@ -8,7 +8,7 @@ import { ApiError } from '../api/http'
 import { getVersion, type VersionDetail } from '../api/submissions'
 import {
   getReviewProjects, getReviewWorkspace, createRound, autoAssign, addReviewTask, cancelTask, extendRound,
-  closeRound, toggleFeedback, submitReview, appealReview, approveAppeal, rejectAppeal, getInspectionTeams,
+  closeRound, toggleFeedback, startReview, submitReview, appealReview, approveAppeal, rejectAppeal, getInspectionTeams,
   getInspectionWorkspace, createInspection,
   type ReviewProject, type ReviewWorkspace, type ReviewRound, type MyTask, type Appeal, type InspectionTeam, type InspectionWorkspace
 } from '../api/reviews'
@@ -22,7 +22,7 @@ const iTeams = ref<InspectionTeam[]>([]); const teamId = ref<number>(); const iw
 
 const stamp = (v?: string | null) => v ? new Date(v).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '—'
 const roundStatus: Record<string, string> = { OPEN: '进行中', CLOSED: '已关闭' }
-const taskStatus: Record<string, string> = { PENDING: '待填写', SUBMITTED: '已提交', CANCELLED: '已取消' }
+const taskStatus: Record<string, string> = { PENDING: '待评审', IN_REVIEW: '评审中', UNDER_REVIEW: '待复核', SUBMITTED: '已完成', CANCELLED: '已取消' }
 const appealStatus: Record<string, string> = { PENDING: '待处理', APPROVED: '已同意重评', REJECTED: '已驳回' }
 const bjt = (ms: number) => new Date(ms).toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai', hour12: false }).replace(' ', 'T')
 
@@ -66,16 +66,21 @@ const dialog = ref<Dialog>(''); const targetRound = ref<ReviewRound>(); const ta
 const form = reactive({
   name: '', deadline: '', reason: '', resolution: '', conclusion: '', feedback: '', comment: '', score: 80,
   rectificationRequired: false, reported: false, reviewerId: undefined as number | undefined, bindingId: undefined as number | undefined,
-  versionId: undefined as number | undefined, taskId: undefined as number | undefined, appealId: undefined as number | undefined, parentId: undefined as number | undefined
+  submissionId: undefined as number | undefined, versionId: undefined as number | undefined, taskId: undefined as number | undefined, appealId: undefined as number | undefined, parentId: undefined as number | undefined
 })
 const titles: Record<Dialog, string> = { '': '', round: '创建互评批次', extend: '延长互评截止时间', task: '手动添加互评任务', submit: '填写并提交互评', appeal: '申请复核', approve: '同意复核并安排重评', reject: '驳回复核申请', inspect: '记录检查结论' }
 
 function openRound() { Object.assign(form, { name: '', deadline: bjt(Date.now() + 7 * 24 * 3600 * 1000) }); dialog.value = 'round' }
 function openExtend(r: ReviewRound) { targetRound.value = r; Object.assign(form, { deadline: bjt(Math.max(Date.now(), Date.parse(r.deadline)) + 24 * 3600 * 1000) }); dialog.value = 'extend' }
 function openTask(r: ReviewRound) { targetRound.value = r; Object.assign(form, { reviewerId: undefined, bindingId: undefined }); dialog.value = 'task' }
-function openSubmit(t: MyTask) { targetTask.value = t; Object.assign(form, { score: 80, comment: '' }); dialog.value = 'submit' }
+const reviewScores = ref<Record<number, number | undefined>>({})
+async function openSubmit(t: MyTask) {
+  try { await startReview(t.id) } catch { return }
+  const current = rw.value?.myTasks.find(item => item.id === t.id)
+  if (current) current.status = 'IN_REVIEW'
+ reviewScores.value = {}; targetTask.value = t; Object.assign(form, { score: 80, comment: '' }); dialog.value = 'submit' }
 function openAppeal() { Object.assign(form, { reason: '' }); dialog.value = 'appeal' }
-function openApprove(a: Appeal) { Object.assign(form, { reviewerId: undefined, resolution: '', appealId: a.id }); dialog.value = 'approve' }
+function openApprove(a: Appeal) { Object.assign(form, { submissionId: undefined, reviewerId: undefined, resolution: '', appealId: a.id }); dialog.value = 'approve' }
 function openReject(a: Appeal) { Object.assign(form, { resolution: '', appealId: a.id }); dialog.value = 'reject' }
 function openInspect(parentId?: number) { Object.assign(form, { versionId: iw.value?.binding[0]?.version_id ?? undefined, conclusion: '', feedback: '', rectificationRequired: false, reported: false, parentId }); dialog.value = 'inspect' }
 
@@ -117,15 +122,17 @@ async function doTask() {
 }
 async function doCancelTask(t: MyTask) {
   if (busy.value) return
-  try { await ElMessageBox.confirm('取消该互评任务后，评审人将失去对被评版本的读取授权。', '取消互评任务', { type: 'warning' }); busy.value = true; await cancelTask(t.id); await loadReviewWorkspace() }
+  try { const { value } = await ElMessageBox.prompt('填写原因。原记录将保留，取消后退出计分。', '取消互评任务', { type: 'warning', inputValidator: v => Boolean(v?.trim()) && v.trim().length <= 300 || '请输入1至300字' }); busy.value = true; await cancelTask(t.id, value.trim()); await loadReviewWorkspace() }
   catch (e) { if (e instanceof ApiError && e.status === 409) await loadReviewWorkspace() } finally { busy.value = false }
 }
 async function doSubmit() {
   if (!targetTask.value || busy.value) return
   if (!form.comment.trim()) { ElMessage.warning('请填写评语'); return }
-  if (form.score < 0 || form.score > 100) { ElMessage.warning('分数须在0到100之间'); return }
+  const criteria = targetTask.value.criteria
+  const scores = criteria.flatMap(c => reviewScores.value[c.id] == null ? [] : [{ criterionId: c.id, score: reviewScores.value[c.id]! }])
+  if (scores.length !== criteria.length) { ElMessage.warning('请填写全部评分维度'); return }
   busy.value = true
-  try { await submitReview(targetTask.value.id, form.score, form.comment.trim()); dialog.value = ''; await loadReviewWorkspace(); ElMessage.success('互评已提交') }
+  try { await submitReview(targetTask.value.id, form.score, form.comment.trim(), scores); dialog.value = ''; await loadReviewWorkspace(); ElMessage.success('互评已提交') }
   catch (e) { if (e instanceof ApiError && e.status === 409) { dialog.value = ''; await loadReviewWorkspace() } } finally { busy.value = false }
 }
 async function doAppeal() {
@@ -139,7 +146,7 @@ async function doApprove() {
   if (busy.value || form.appealId == null) return
   if (form.reviewerId == null || !form.resolution.trim()) { ElMessage.warning('请选择重评人并填写处理意见'); return }
   busy.value = true
-  try { await approveAppeal(form.appealId, form.reviewerId, form.resolution.trim()); dialog.value = ''; await loadReviewWorkspace(); ElMessage.success('已同意复核并安排重评') }
+  try { await approveAppeal(form.appealId, form.reviewerId, form.resolution.trim(), form.submissionId); dialog.value = ''; await loadReviewWorkspace(); ElMessage.success('已同意复核并安排重评') }
   catch (e) { if (e instanceof ApiError && e.status === 409) { dialog.value = ''; await loadReviewWorkspace() } } finally { busy.value = false }
 }
 async function doReject() {
@@ -149,7 +156,7 @@ async function doReject() {
   catch (e) { if (e instanceof ApiError && e.status === 409) { dialog.value = ''; await loadReviewWorkspace() } } finally { busy.value = false }
 }
 async function doInspect() {
-  if (!teamId.value || busy.value || form.versionId == null) { ElMessage.warning('请选择要检查的具体版本'); return }
+  if (!teamId.value || busy.value || (form.versionId == null && !(iw.value?.missing && form.reported && form.parentId == null))) { ElMessage.warning('请选择要检查的具体版本'); return }
   if (!form.conclusion.trim()) { ElMessage.warning('请填写检查结论'); return }
   if ((form.rectificationRequired || form.reported) && !form.feedback.trim()) { ElMessage.warning('要求整改或上报问题时须填写问题与反馈'); return }
   busy.value = true
@@ -172,18 +179,18 @@ const bytes = (n: number | null | undefined) => `${((n || 0) / 1024 / 1024).toFi
       <div class="submission-selectors"><label>项目 <el-select v-model="projectId" :disabled="busy || loading || !rProjects.length" @change="loadReviewWorkspace"><el-option v-for="p in rProjects" :key="p.id" :value="p.id" :label="`${p.name} · ${p.bindingCount} 个被评版本`"/></el-select></label><el-button v-if="rw?.isTeacher" type="primary" :disabled="busy || loading" @click="openRound">创建互评批次</el-button></div>
       <el-empty v-if="!rw" description="暂无可用项目"/>
       <template v-else>
-        <el-alert v-if="rw.project.demo_fixture" type="info" :closable="false" title="已为各团队确认被评版本，可直接创建互评批次并自动分配。"/>
+        <el-alert v-if="rw.isTeacher && rw.project.demo_fixture" type="info" :closable="false" title="已为各团队确认被评版本，可直接创建互评批次并自动分配。"/>
         <!-- 学生：我的互评待办 -->
         <template v-if="rw.isStudent">
           <section class="submission-panel" v-if="rw.myTasks.length">
-            <h3>我的互评待办（{{ rw.myTasks.filter(t => t.status === 'PENDING').length }} 项待填写）</h3>
+            <h3>我的互评待办（{{ rw.myTasks.filter(t => ['PENDING','IN_REVIEW'].includes(t.status)).length }} 项待填写）</h3>
             <p class="muted">评审固定被评版本，禁止自评；提交后不可修改。点击“查看成果”可读取对方团队材料。</p>
             <el-table :data="rw.myTasks" stripe>
               <el-table-column label="被评团队 / 版本" min-width="200"><template #default="{ row }"><strong>{{ row.team_name }}</strong><p class="muted">{{ row.iteration_name }} · v{{ row.version_no }} · #{{ row.version_id }}</p></template></el-table-column>
-              <el-table-column label="状态" width="120"><template #default="{ row }"><el-tag :type="row.status === 'SUBMITTED' ? 'success' : row.status === 'CANCELLED' ? 'info' : 'warning'" size="small">{{ taskStatus[row.status] }}{{ row.reevaluation ? ' · 重评' : '' }}</el-tag></template></el-table-column>
+              <el-table-column label="状态" width="120"><template #default="{ row }"><el-tag :type="row.status === 'SUBMITTED' ? 'success' : row.status === 'CANCELLED' ? 'info' : 'warning'" size="small">{{ taskStatus[row.status] }}{{ row.reevaluation ? ' · 重评' : '' }}</el-tag><el-tag v-if="row.overdue" size="small" type="danger">逾期</el-tag></template></el-table-column>
               <el-table-column label="截止" min-width="160"><template #default="{ row }">{{ stamp(row.deadline) }}</template></el-table-column>
               <el-table-column label="我的评分 / 评语" min-width="200"><template #default="{ row }"><template v-if="row.status === 'SUBMITTED'"><strong>{{ row.submitted_score }} 分</strong><p class="muted">{{ row.submitted_comment }}</p></template><span v-else class="muted">尚未提交</span></template></el-table-column>
-              <el-table-column label="操作" width="210"><template #default="{ row }"><div class="row-actions"><el-button link type="primary" @click="showEvaluated(row)">查看成果</el-button><el-button v-if="row.status === 'PENDING'" link type="primary" :disabled="busy || loading" @click="openSubmit(row)">填写互评</el-button></div></template></el-table-column>
+              <el-table-column label="操作" width="210"><template #default="{ row }"><div class="row-actions"><el-button link type="primary" @click="showEvaluated(row)">查看成果</el-button><el-button v-if="['PENDING','IN_REVIEW'].includes(row.status) && !row.overdue" link type="primary" :disabled="busy || loading" @click="openSubmit(row)">{{ row.status === 'PENDING' ? '开始评审' : '继续评审' }}</el-button></div></template></el-table-column>
             </el-table>
           </section>
           <el-empty v-else description="暂无分配给你的互评任务"/>
@@ -217,9 +224,9 @@ const bytes = (n: number | null | undefined) => `${((n || 0) / 1024 / 1024).toFi
               <el-table v-if="rw.progress?.some(p => p.round_id === r.id)" :data="rw.progress.filter(p => p.round_id === r.id)" size="small" stripe style="margin-top:12px">
                 <el-table-column label="评审人" width="120" prop="reviewer_name"/>
                 <el-table-column label="被评团队" min-width="160" prop="team_name"/>
-                <el-table-column label="状态" width="120"><template #default="{ row }"><el-tag :type="row.status === 'SUBMITTED' ? 'success' : row.status === 'CANCELLED' ? 'info' : 'warning'" size="small">{{ taskStatus[row.status] }}{{ row.reevaluation ? ' · 重评' : '' }}</el-tag></template></el-table-column>
+                <el-table-column label="状态" width="120"><template #default="{ row }"><el-tag :type="row.status === 'SUBMITTED' ? 'success' : row.status === 'CANCELLED' ? 'info' : 'warning'" size="small">{{ taskStatus[row.status] }}{{ row.reevaluation ? ' · 重评' : '' }}</el-tag><el-tag v-if="row.overdue" size="small" type="danger">逾期</el-tag></template></el-table-column>
                 <el-table-column label="评分 / 评语" min-width="200"><template #default="{ row }"><template v-if="row.status === 'SUBMITTED'"><strong>{{ row.score }} 分</strong><p class="muted">{{ row.comment }}</p></template></template></el-table-column>
-                <el-table-column label="操作" width="100"><template #default="{ row }"><el-button v-if="row.status === 'PENDING'" link type="danger" @click="doCancelTask(row)">取消</el-button></template></el-table-column>
+                <el-table-column label="操作" width="100"><template #default="{ row }"><el-button v-if="row.status !== 'CANCELLED'" link type="danger" @click="doCancelTask(row)">取消</el-button></template></el-table-column>
               </el-table>
             </article>
           </section>
@@ -236,16 +243,26 @@ const bytes = (n: number | null | undefined) => `${((n || 0) / 1024 / 1024).toFi
         </template>
         <!-- 助教：只读 -->
         <section v-else class="submission-panel"><h3>被评版本与互评批次</h3><p class="muted">助教只读查看；过程检查请使用“助教检查”页签。</p><article v-for="b in rw.bindings" :key="b.binding_id" class="record-card"><strong>{{ b.team_name }} · {{ b.iteration_name }} · v{{ b.version_no }}</strong><p class="muted">{{ b.summary }}</p></article></section>
+        <template v-if="rw.isTA">
+          <h3>授权团队的互评记录</h3>
+          <el-table :data="rw.progress || []" empty-text="暂无授权团队的评审记录">
+            <el-table-column prop="team_name" label="被评团队"/>
+            <el-table-column prop="reviewer_name" label="评审人"/>
+            <el-table-column label="状态"><template #default="{row}">{{ taskStatus[row.status] }}</template></el-table-column>
+            <el-table-column prop="score" label="分数"/>
+          </el-table>
+        </template>
       </template>
     </el-tab-pane>
 
     <!-- ============ 助教检查 ============ -->
     <el-tab-pane label="助教检查" name="inspection">
-      <div class="submission-selectors"><label>团队 <el-select v-model="teamId" :disabled="busy || loading || !iTeams.length" @change="loadInspectionWorkspace"><el-option v-for="t in iTeams" :key="t.id" :value="t.id" :label="`${t.project_name} / ${t.name}`"/></el-select></label><el-button v-if="iw?.isTA" type="primary" :disabled="busy || loading || !iw?.versions.length" @click="openInspect()">新建检查</el-button></div>
+      <div class="submission-selectors"><label>团队 <el-select v-model="teamId" :disabled="busy || loading || !iTeams.length" @change="loadInspectionWorkspace"><el-option v-for="t in iTeams" :key="t.id" :value="t.id" :label="`${t.project_name} / ${t.name}`"/></el-select></label><el-button v-if="iw?.isTA" type="primary" :disabled="busy || loading || (!iw?.versions.length && !iw?.missing)" @click="openInspect()">新建检查</el-button></div>
       <el-empty v-if="!iw" description="暂无可检查的团队"/>
       <template v-else>
         <el-alert v-if="iw.team && iw.project.demo_fixture" type="info" :closable="false" title="助教可针对具体版本记录检查结论与整改反馈。"/>
         <div class="submission-header" v-if="iw.team"><h2>{{ iw.team.name }}</h2><p class="muted">{{ iw.project.name }} · {{ projectStatusNames[iw.project.status] }}</p></div>
+        <p v-if="iw.missing">已过最终截止，团队暂无正式提交。</p><ul><li v-for="iteration in iw.progress" :key="iteration.id">{{ iteration.name }} · 已完成 {{ iteration.completed_count }} / {{ iteration.task_count }} 项任务</li></ul>
         <p v-if="iw.isTeacher" class="muted submission-note">教师可查看助教检查与问题上报，评分请使用“评分与成绩”模块。</p>
         <p v-else-if="iw.isStudent" class="muted submission-note">你可查看本团队收到的检查结论与整改反馈；整改材料由负责人正式重交。</p>
         <section class="submission-panel">
@@ -269,11 +286,11 @@ const bytes = (n: number | null | undefined) => `${((n || 0) / 1024 / 1024).toFi
       <template v-if="dialog==='round'"><el-form-item label="批次名称" required><el-input v-model="form.name" maxlength="160"/></el-form-item><el-form-item label="互评截止时间（北京时间）" required><input v-model="form.deadline" class="native-date" type="datetime-local" step="1"></el-form-item></template>
       <template v-if="dialog==='extend'"><el-alert type="info" :closable="false" title="新截止时间须晚于当前截止时间；不改变已完成评分。"/><el-form-item label="新截止时间（北京时间）" required><input v-model="form.deadline" class="native-date" type="datetime-local" step="1"></el-form-item></template>
       <template v-if="dialog==='task'"><el-form-item label="评审人" required><el-select v-model="form.reviewerId" placeholder="选择学生"><el-option v-for="s in rw?.students || []" :key="s.id" :value="s.id" :label="`${s.display_name}（${s.username}）`"/></el-select></el-form-item><el-form-item label="被评版本" required><el-select v-model="form.bindingId" placeholder="选择被评团队版本"><el-option v-for="b in rw?.bindings || []" :key="b.binding_id" :value="b.binding_id" :label="`${b.team_name} · v${b.version_no}`"/></el-select></el-form-item></template>
-      <template v-if="dialog==='submit'"><el-alert type="info" :closable="false" title="评审固定成果及标准版本，禁止自评；提交后不可修改。评语对学生匿名展示。"/><p><strong>{{ targetTask?.team_name }} · {{ targetTask?.iteration_name }} · v{{ targetTask?.version_no }}</strong></p><el-form-item label="评分（0-100）" required><el-input-number v-model="form.score" :min="0" :max="100"/></el-form-item><el-form-item label="评语（必填）" required><el-input v-model="form.comment" type="textarea" :rows="4" maxlength="2000"/></el-form-item></template>
+      <template v-if="dialog==='submit'"><el-alert type="info" :closable="false" title="评审固定成果及标准版本，禁止自评；提交后不可修改。评语对学生匿名展示。"/><p><strong>{{ targetTask?.team_name }} · {{ targetTask?.iteration_name }} · v{{ targetTask?.version_no }}</strong></p><el-form-item v-for="criterion in targetTask?.criteria" :key="criterion.id" :label="`${criterion.name}（满分 ${criterion.max_score}）`" required><el-input-number v-model="reviewScores[criterion.id]" :min="0" :max="criterion.max_score" :precision="0"/><span>{{ criterion.description }}</span></el-form-item><el-form-item v-if="!targetTask?.rubric_id" label="历史批次评分（0-100）" required><el-input-number v-model="form.score" :min="0" :max="100"/></el-form-item><el-form-item label="评语（必填）" required><el-input v-model="form.comment" type="textarea" :rows="4" maxlength="2000"/></el-form-item></template>
       <template v-if="dialog==='appeal'"><el-alert type="info" :closable="false" title="对本人团队收到的互评结果申请复核，教师决定是否重评并保留历史。"/><el-form-item label="复核原因" required><el-input v-model="form.reason" type="textarea" :rows="3" maxlength="2000"/></el-form-item></template>
-      <template v-if="dialog==='approve'"><el-alert type="info" :closable="false" title="同意后新增一次重评任务，原互评结果保留。"/><el-form-item label="重评人" required><el-select v-model="form.reviewerId" placeholder="选择学生"><el-option v-for="s in rw?.students || []" :key="s.id" :value="s.id" :label="`${s.display_name}（${s.username}）`"/></el-select></el-form-item><el-form-item label="处理意见" required><el-input v-model="form.resolution" type="textarea" :rows="3" maxlength="2000"/></el-form-item></template>
+      <template v-if="dialog==='approve'"><el-alert type="info" :closable="false" title="同意后新增一次重评任务，原互评结果保留。"/><el-form-item label="需重评的原记录"><el-select v-model="form.submissionId" placeholder="有多条有效记录时请选择"><el-option v-for="p in (rw?.progress || []).filter(p => p.submission_id && !p.superseded_by && p.binding_id === rw?.appeals.find(a => a.id === form.appealId)?.binding_id)" :key="p.id" :value="p.submission_id!" :label="`#${p.submission_id} · ${p.reviewer_name} · ${p.score}分`"/></el-select></el-form-item><el-form-item label="重评人" required><el-select v-model="form.reviewerId" placeholder="选择学生"><el-option v-for="s in rw?.students || []" :key="s.id" :value="s.id" :label="`${s.display_name}（${s.username}）`"/></el-select></el-form-item><el-form-item label="处理意见" required><el-input v-model="form.resolution" type="textarea" :rows="3" maxlength="2000"/></el-form-item></template>
       <template v-if="dialog==='reject'"><el-form-item label="处理意见" required><el-input v-model="form.resolution" type="textarea" :rows="3" maxlength="2000"/></el-form-item></template>
-      <template v-if="dialog==='inspect'"><el-alert type="info" :closable="false" title="检查关联具体版本；要求整改或上报问题须填写反馈。整改后由负责人正式重交新版，再进行复查。"/><el-form-item label="检查的具体版本" required><el-select v-model="form.versionId"><el-option v-for="v in iw?.versions || []" :key="v.id" :value="v.id" :label="`${v.iteration_name} · v${v.version_no}（#${v.id}）`"/></el-select></el-form-item><el-form-item label="检查结论" required><el-input v-model="form.conclusion" type="textarea" :rows="3" maxlength="2000"/></el-form-item><el-form-item label="问题与整改反馈"><el-input v-model="form.feedback" type="textarea" :rows="3" maxlength="2000"/></el-form-item><el-form-item><el-checkbox v-model="form.rectificationRequired">需要整改（负责人需重交新版）</el-checkbox><el-checkbox v-model="form.reported">缺交 / 迟交 / 问题上报教师</el-checkbox></el-form-item></template>
+      <template v-if="dialog==='inspect'"><el-alert type="info" :closable="false" title="检查关联具体版本。截止后仍未提交的团队可留空版本，勾选上报并填写说明。复查须选择整改后重交的新版本。"/><el-form-item label="检查的具体版本" :required="!iw?.missing"><el-select v-model="form.versionId" clearable><el-option v-for="v in iw?.versions || []" :key="v.id" :value="v.id" :label="`${v.iteration_name} · v${v.version_no}（#${v.id}）`"/></el-select></el-form-item><el-form-item label="检查结论" required><el-input v-model="form.conclusion" type="textarea" :rows="3" maxlength="2000"/></el-form-item><el-form-item label="问题与整改反馈"><el-input v-model="form.feedback" type="textarea" :rows="3" maxlength="2000"/></el-form-item><el-form-item><el-checkbox v-model="form.rectificationRequired">需要整改（负责人需重交新版）</el-checkbox><el-checkbox v-model="form.reported">缺交 / 迟交 / 问题上报教师</el-checkbox></el-form-item></template>
     </el-form>
     <template #footer>
       <el-button :disabled="busy || loading" @click="dialog=''">取消</el-button>

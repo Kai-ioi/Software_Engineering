@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 
-@Entity @Table(name = "team")
+@Entity @Table(name = "project_team")
 public class Team {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -24,6 +24,8 @@ public class Team {
     @Column(nullable = false)
     private OffsetDateTime updatedAt;
 
+    @Version private long revision;
+    public void touch(){updatedAt=OffsetDateTime.now(ZoneOffset.UTC);}
     protected Team() {}
 
     public Team(Long projectId, String name, Long leaderId) {

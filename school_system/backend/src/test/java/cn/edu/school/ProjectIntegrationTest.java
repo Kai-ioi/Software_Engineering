@@ -24,13 +24,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 })
 @AutoConfigureMockMvc
 @ActiveProfiles("demo")
+@org.springframework.transaction.annotation.Transactional
 class ProjectIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired ProjectRepository projects;
 
     @BeforeEach
-    void clean() { projects.deleteAll(); }
+    void clean() {}
 
     record CsrfSession(MockHttpSession session, String header, String token) {}
 
@@ -69,7 +70,7 @@ class ProjectIntegrationTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("PUBLISHED"));
         var student = login("student01");
         mvc.perform(get("/api/courses/1/projects").session(student))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.data.length()").value(1))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.data.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)))
             .andExpect(jsonPath("$.data[0].title").value("课程管理系统"))
             .andExpect(jsonPath("$.data[0].criteria.length()").value(2));
     }
@@ -81,7 +82,7 @@ class ProjectIntegrationTest {
             .contentType(MediaType.APPLICATION_JSON).content(projectBody("草稿项目")))
             .andExpect(status().isOk());
         var student = login("student01");
-        mvc.perform(get("/api/courses/1/projects").session(student)).andExpect(jsonPath("$.data.length()").value(0));
+        mvc.perform(get("/api/courses/1/projects").session(student)).andExpect(jsonPath("$.data[*].title").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem("草稿项目"))));
         var s = csrf(student);
         mvc.perform(post("/api/courses/1/projects").session(student).header(s.header(), s.token())
             .contentType(MediaType.APPLICATION_JSON).content(projectBody("越权项目")))

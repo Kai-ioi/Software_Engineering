@@ -6,7 +6,10 @@ import type { ProjectInput } from '../api/projects'
 const props = defineProps<{ initial?: ProjectInput | null; busy?: boolean }>()
 const emit = defineEmits<{ (e: 'submit', input: ProjectInput): void; (e: 'cancel'): void }>()
 
+const teacherWeight = ref(70)
 const title = ref('')
+const changeReason = ref('')
+const remediationUntil = ref('')
 const description = ref('')
 const deadline = ref<Date | null>(null)
 const minTeamSize = ref(1)
@@ -15,6 +18,7 @@ const criteria = ref<{ name: string; weight: number; description: string }[]>([]
 
 watch(() => props.initial, fill, { immediate: true })
 function fill(v?: ProjectInput | null) {
+  teacherWeight.value = v?.teacherWeight ?? 70
   title.value = v?.title ?? ''
   description.value = v?.description ?? ''
   deadline.value = v?.deadline ? new Date(v.deadline) : null
@@ -34,8 +38,11 @@ function submit() {
   if (minTeamSize.value > maxTeamSize.value) { ElMessage.warning('团队最少人数不能大于最多人数'); return }
   emit('submit', {
     title: title.value.trim(),
+    changeReason: changeReason.value.trim() || undefined,
+    remediationUntil: remediationUntil.value ? remediationUntil.value + ':00+08:00' : undefined,
     description: description.value.trim(),
     deadline: deadline.value ? deadline.value.toISOString() : null,
+    teacherWeight: teacherWeight.value, peerWeight: 100-teacherWeight.value,
     minTeamSize: minTeamSize.value,
     maxTeamSize: maxTeamSize.value,
     criteria: criteria.value.filter(c => c.name.trim()).map(c => ({ name: c.name.trim(), weight: c.weight || 0, description: c.description.trim() || undefined }))
@@ -70,6 +77,11 @@ function submit() {
       </div>
       <p class="form-hint">当前权重合计 {{ weightSum }}%，发布前需合计为 100%。</p>
     </el-form-item>
+    <el-form-item label="成绩构成"><el-input-number v-model="teacherWeight" :min="0" :max="100" :precision="0"/><span>教师 {{teacherWeight}}% · 互评 {{100-teacherWeight}}%</span></el-form-item>
+    <template v-if="initial">
+      <el-form-item label="变更原因"><el-input v-model="changeReason" maxlength="2000"/></el-form-item>
+      <el-form-item label="整改截止（北京时间，涉及既有提交时填写）"><input v-model="remediationUntil" type="datetime-local"></el-form-item>
+    </template>
     <div class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
       <el-button type="primary" native-type="submit" :loading="busy">保存</el-button>

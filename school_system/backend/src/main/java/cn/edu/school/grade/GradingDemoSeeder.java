@@ -38,6 +38,7 @@ public class GradingDemoSeeder {
     }
 
     private void seedReviewVersion(long team, long teacher){
+        if(db.queryForObject("SELECT COUNT(*) FROM submission_package WHERE team_id=?",Long.class,team)>0)return;
         long iteration;
         var iters = db.queryForList("SELECT id FROM team_iteration WHERE team_id=? ORDER BY sequence_no, id LIMIT 1", Long.class, team);
         if(iters.isEmpty()){

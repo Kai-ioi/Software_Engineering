@@ -42,7 +42,7 @@ async function loadTeams(){
  w.value=undefined;teams.value=[];teamId.value=undefined;iterationId.value=undefined;selected.value=[];pending.value=undefined
  if(!courseId.value)return
  loading.value=true;failed.value=false
- try{teams.value=await getTeams(courseId.value);if(teams.value.length){teamId.value=teams.value[0]!.id;restorePending();await load()}}catch{failed.value=true}finally{loading.value=false}
+ try{teams.value=await getTeams(courseId.value);if(teams.value.length){teamId.value=(teams.value.find(t=>t.id===Number(route.query.teamId)) ?? teams.value[0]!).id;restorePending();await load()}}catch{failed.value=true}finally{loading.value=false}
 }
 async function changeTeam(){w.value=undefined;iterationId.value=undefined;selected.value=[];pending.value=undefined;restorePending();await load()}
 watch(iterationId,()=>{selected.value=[];summary.value=''})

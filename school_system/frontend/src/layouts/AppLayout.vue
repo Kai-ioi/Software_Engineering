@@ -8,6 +8,7 @@ import { getCourses } from '../api/courses'
 import { getProjects } from '../api/projects'
 
 const route = useRoute(); const router = useRouter()
+const retentionAccess = ref(false)
 const mode = ref(''); const busy = ref(false); const mobileMenu = ref(false)
 
 type NavItem = { label: string; icon: Component; active: (p: string) => boolean; path?: string; go?: () => void }
@@ -42,6 +43,7 @@ const nav: NavItem[] = [
   { path: '/modules/submissions', label: '成果与版本', icon: Document, active: (p) => p === '/modules/submissions' || /^\/courses\/\d+\/submissions/.test(p) },
   { path: '/modules/reviews', label: '检查与互评', icon: ChatDotRound, active: (p) => p === '/modules/reviews' || /^\/courses\/\d+\/reviews/.test(p) },
   { path: '/modules/grades', label: '评分与成绩', icon: Medal, active: (p) => p === '/modules/grades' || /^\/courses\/\d+\/grades/.test(p) },
+  { path: '/modules/history', label: '过程记录', icon: Document, active: (p) => p === '/modules/history' },
   { path: '/modules/notifications', label: '站内通知', icon: Bell, active: (p) => p === '/modules/notifications' || /^\/courses\/\d+\/notifications/.test(p) }
 ]
 
@@ -52,7 +54,9 @@ function onNav(item: NavItem) {
 }
 
 const title = computed(() => String(route.meta.title || '课程空间'))
-onMounted(async () => { try { mode.value = (await request<{ mode: string }>('/health', {}, true)).mode } catch {} })
+onMounted(async () => {
+  try { const result = await request<{admin:boolean;approver:boolean}>('/platform/retention/access', {}, true); retentionAccess.value = result.admin || result.approver } catch {}
+  try { mode.value = (await request<{ mode: string }>('/health', {}, true)).mode } catch {} })
 async function signOut() { busy.value = true; try { await logout(); await router.replace('/login') } catch {} finally { busy.value = false } }
 </script>
 <template>
@@ -60,7 +64,7 @@ async function signOut() { busy.value = true; try { await logout(); await router
     <aside class="sidebar" :class="{ expanded: mobileMenu }">
       <RouterLink to="/courses" class="brand"><span class="brand-symbol">协</span><span>课协<span class="brand-en">COURSE COLLAB</span></span></RouterLink>
       <div class="nav-caption">课程工作空间</div>
-      <nav aria-label="主导航"><a v-for="item in nav" :key="item.label" class="nav-item" :class="{ active: item.active(route.path) }" @click="onNav(item)"><component :is="item.icon"/><span>{{ item.label }}</span></a></nav>
+      <nav aria-label="主导航"><RouterLink v-if="retentionAccess" class="nav-item" to="/platform/retention"><Document/><span>课程数据留存</span></RouterLink><RouterLink v-if="auth.user?.platformAdmin" class="nav-item" to="/platform/directory"><User/><span>平台基础资料</span></RouterLink><a v-for="item in nav" :key="item.label" class="nav-item" :class="{ active: item.active(route.path) }" @click="onNav(item)"><component :is="item.icon"/><span>{{ item.label }}</span></a></nav>
       <div class="sidebar-bottom"><span class="status-dot"></span>高校课程项目协作与评审平台<span class="sidebar-version">框架版本 · 0.1</span></div>
     </aside>
     <div class="main-shell">

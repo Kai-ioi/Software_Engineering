@@ -11,6 +11,29 @@ public class TeamController {
     private final TeamService service;
     public TeamController(TeamService service) { this.service = service; }
 
+    @GetMapping("/grouping-window")
+    public ApiResponse<?> window(@AuthenticationPrincipal UserPrincipal user,@PathVariable Long courseId,@PathVariable Long projectId) {
+        return ApiResponse.ok(service.window(user.id(),courseId,projectId));
+    }
+
+    @PostMapping("/grouping-window")
+    public ApiResponse<?> window(@AuthenticationPrincipal UserPrincipal user,@PathVariable Long courseId,@PathVariable Long projectId,
+                                 @RequestBody TeamService.GroupingWindow input) {
+        return ApiResponse.ok(service.configureWindow(user.id(),courseId,projectId,input));
+    }
+
+    @PostMapping("/{teamId}/assign")
+    public ApiResponse<?> assign(@AuthenticationPrincipal UserPrincipal user,@PathVariable Long courseId,@PathVariable Long projectId,
+                                 @PathVariable Long teamId,@RequestParam Long studentId) {
+        return ApiResponse.ok(service.assign(user.id(),courseId,projectId,teamId,studentId));
+    }
+
+    @PostMapping("/{teamId}/members/{memberId}/exit-decision")
+    public ApiResponse<?> exitDecision(@AuthenticationPrincipal UserPrincipal user,@PathVariable Long courseId,@PathVariable Long projectId,
+                                       @PathVariable Long teamId,@PathVariable Long memberId,@RequestParam boolean approved) {
+        return ApiResponse.ok(service.decideExit(user.id(),courseId,projectId,teamId,memberId,approved));
+    }
+
     @GetMapping
     public ApiResponse<List<TeamService.TeamView>> list(@AuthenticationPrincipal UserPrincipal user, @PathVariable Long courseId, @PathVariable Long projectId) {
         return ApiResponse.ok(service.list(user.id(), courseId, projectId));

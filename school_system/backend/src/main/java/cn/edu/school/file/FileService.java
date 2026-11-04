@@ -26,6 +26,7 @@ public class FileService {
     @Transactional(rollbackFor=Exception.class)
     public FileView upload(Long userId,Long courseId,MultipartFile file)throws IOException{
         permission.requireMember(userId,courseId);
+        permission.requireActiveCourse(courseId);
         var name=Optional.ofNullable(file.getOriginalFilename()).orElse("");
         if(name.isBlank()||name.length()>240||name.contains("/")||name.contains("\\")||name.chars().anyMatch(Character::isISOControl))
             throw bad("文件名不符合要求");

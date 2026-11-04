@@ -48,6 +48,7 @@ class SubmissionIntegrationTest {
   db.update("INSERT INTO course_project(course_id,name,status,final_deadline) VALUES(1,?,'IN_PROGRESS',?)","成果测试"+UUID.randomUUID(),deadline.atOffset(ZoneOffset.UTC));
   project=db.queryForObject("SELECT MAX(id) FROM course_project",Long.class);
   db.update("INSERT INTO project_team(project_id,name,leader_id) VALUES(?,'成果测试团队',?)",project,leader);team=db.queryForObject("SELECT MAX(id) FROM project_team",Long.class);
+        db.update("INSERT INTO assistant_team_scope(team_id,user_id) VALUES(?,?)",team,who("assistant01").id());
   db.update("INSERT INTO project_team_member(team_id,user_id) VALUES(?,?),(?,?)",team,leader,team,member);
   db.update("INSERT INTO team_iteration(team_id,name,goal,sequence_no,planned_start,planned_end,status) VALUES(?,'成果迭代','提交成果',1,DATE '2030-01-01',DATE '2030-01-09','ENDED')",team);iteration=db.queryForObject("SELECT MAX(id) FROM team_iteration",Long.class);
  }
