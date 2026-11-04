@@ -6,7 +6,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
-@Entity @Table(name = "project")
+@Entity @Table(name = "course_project")
 public class Project {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -14,14 +14,23 @@ public class Project {
     @Column(nullable = false)
     private Long courseId;
 
-    @Column(nullable = false, length = 160)
+    @Column(name="name", nullable = false, length = 160)
     private String title;
 
     @Column(nullable = false, length = 4000)
     private String description;
 
-    @Column
+    @Column(name="final_deadline")
     private OffsetDateTime deadline;
+    private OffsetDateTime groupingOpensAt;
+    private OffsetDateTime groupingClosesAt;
+
+    public OffsetDateTime getExplicitGroupingClose() { return groupingClosesAt; }
+    public OffsetDateTime getGroupingOpensAt() { return groupingOpensAt; }
+    public OffsetDateTime getGroupingClosesAt() { return groupingClosesAt == null ? deadline : groupingClosesAt; }
+    public void configureGrouping(OffsetDateTime opens, OffsetDateTime closes) {
+        groupingOpensAt=opens; groupingClosesAt=closes;
+    }
 
     @Column(nullable = false)
     private int minTeamSize;
@@ -82,7 +91,7 @@ public class Project {
     }
 
     public void close() {
-        this.status = ProjectStatus.CLOSED;
+        this.status = ProjectStatus.TERMINATED;
         this.updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
     }
 
@@ -91,6 +100,13 @@ public class Project {
         this.updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
     }
 
+    @Column(nullable=false) private int teacherWeight=70;
+    @Column(nullable=false) private int peerWeight=30;
+    public int getTeacherWeight(){return teacherWeight;}
+    public int getPeerWeight(){return peerWeight;}
+    public void weights(int teacher,int peer){teacherWeight=teacher;peerWeight=peer;}
+    public void start(){status=ProjectStatus.IN_PROGRESS;updatedAt=OffsetDateTime.now(ZoneOffset.UTC);}
+    public void end(){status=ProjectStatus.ENDED;updatedAt=OffsetDateTime.now(ZoneOffset.UTC);}
     public Long getId() { return id; }
     public Long getCourseId() { return courseId; }
     public String getTitle() { return title; }

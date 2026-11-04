@@ -43,6 +43,40 @@ public class GradingService {
         if(rows.isEmpty()) conflict("NO_RUBRIC", "本课程尚未配置评分标准，请先配置后再评分");
         return rows.getFirst();
     }
+    private Map<String,Object> rubricForProject(long course,long project){
+        var rows=db.queryForList("SELECT * FROM grading_rubric WHERE project_id=? AND active=TRUE ORDER BY version_no DESC LIMIT 1",project);
+        if(!rows.isEmpty())return rows.getFirst();
+        // Only historical demo projects use the old course rubric. Live projects must publish their own criteria.
+        if(Boolean.TRUE.equals(gateway.project(project).get("demo_fixture"))) {
+            var legacy=db.queryForList("SELECT * FROM grading_rubric WHERE course_id=? AND project_id IS NULL AND active=TRUE ORDER BY version_no DESC LIMIT 1",course);
+            if(!legacy.isEmpty())return legacy.getFirst();
+        }
+        conflict("NO_RUBRIC","项目尚未发布完整评分标准，请到项目管理配置");return Map.of();
+    }
+    private List<Map<String,Object>> eligibleTeams(long course){return db.queryForList("SELECT t.*,p.name AS project_name FROM project_team t JOIN course_project p ON p.id=t.project_id WHERE p.course_id=? AND p.status IN ('PUBLISHED','IN_PROGRESS','ENDED') ORDER BY t.id",course);}
+    private void peerComplete(long binding){
+        check(db.queryForObject("SELECT COUNT(*) FROM review_task WHERE binding_id=? AND status='PENDING'",Long.class,binding)==0,"PEER_PENDING","仍有互评或重评任务未完成，不能发布或更正成绩");
+        check(db.queryForObject("SELECT COUNT(*) FROM review_appeal WHERE binding_id=? AND status='PENDING'",Long.class,binding)==0,"APPEAL_PENDING","互评复核尚未处理，不能发布或更正成绩");
+        check(db.queryForObject("SELECT COUNT(*) FROM review_submission WHERE binding_id=? AND superseded_by IS NULL AND task_id IN (SELECT id FROM review_task WHERE status='SUBMITTED')",Long.class,binding)>0,"MISSING_PEER_SCORE","互评分数缺失");
+    }
+    private Map<String,Object> currentSheet(Ctx c){
+        var sheet=one("SELECT * FROM grading_sheet WHERE team_id=? AND rubric_id=? AND status='SUBMITTED'","MISSING_TEACHER_SCORE",n(c.team,"id"),n(c.rubric,"id"));
+        check(n(sheet,"review_binding_id")==n(c.binding,"id"),"SCORE_BINDING_STALE","被评版本已变更，请按新版本重新评分");return sheet;
+    }
+    private double teacherTotal(Ctx c,long sheet){
+        var values=db.queryForList("SELECT criterion_id,score FROM grading_criterion_score WHERE sheet_id=?",sheet);
+        validateScores(c.criteria,values.stream().map(v->new ScoreInput(n(v,"criterion_id"),ni(v,"score"))).toList(),true);
+        return values.stream().mapToInt(v->ni(v,"score")).sum();
+    }
+    private double peerTotal(long binding){peerComplete(binding);return db.queryForList("SELECT score FROM review_submission WHERE binding_id=? AND superseded_by IS NULL AND task_id IN (SELECT id FROM review_task WHERE status='SUBMITTED')",binding).stream().mapToInt(v->ni(v,"score")).average().orElseThrow();}
+    private int teacherWeight(long projectId,Map<String,Object> rubric) {
+        return db.queryForObject("SELECT COUNT(*) FROM project_team WHERE project_id=?",Long.class,projectId)==1
+            ? 100 : ni(rubric,"teacher_weight");
+    }
+    private double weighted(double teacher,double peer,int tw,int pw){check(tw>=0&&pw>=0&&tw+pw==100,"INVALID_WEIGHTS","评分权重无效");return Math.round((teacher*tw+peer*pw))/100.0;}
+    private void snapshot(long result,Long sheet,long binding,boolean peerUsed){try{db.update("UPDATE grade_result SET score_snapshot=?,peer_snapshot=?,review_binding_id=? WHERE id=?",
+        json.writeValueAsString(sheet==null?Map.of():sheetSnapshot(sheet)),
+        json.writeValueAsString(peerUsed?rows("SELECT * FROM review_submission WHERE binding_id=? AND superseded_by IS NULL AND task_id IN (SELECT id FROM review_task WHERE status='SUBMITTED') ORDER BY id",binding):List.of()),binding,result);}catch(JsonProcessingException e){throw new IllegalStateException(e);}}
     private List<Map<String,Object>> criteriaOf(long rubricId){
         return rows("SELECT * FROM grading_criterion WHERE rubric_id=? ORDER BY sort_order, id", rubricId);
     }
@@ -56,7 +90,9 @@ public class GradingService {
         var project = gateway.project(n(team, "project_id"));
         long courseId = n(project, "course_id");
         permission.requireTeacher(user, courseId);
-        var rubric = rubricOf(courseId);
+        if (lock && !Set.of("PUBLISHED","IN_PROGRESS","ENDED").contains(project.get("status")))
+            conflict("PROJECT_READ_ONLY", "当前项目状态不允许修改评分或成绩");
+        var rubric = rubricForProject(courseId,n(project,"id"));
         return new Ctx(user, courseId, team, project, rubric, criteriaOf(n(rubric, "id")), bindingOf(teamId));
     }
 
@@ -67,81 +103,32 @@ public class GradingService {
 
     /** Teacher: aggregate summary for every team with a confirmed binding.
      *  Returns teacher/peer/final scores plus per-team exceptions. */
-    public Map<String,Object> summary(long user, long courseId){
-        permission.requireTeacher(user, courseId);
-        var rubric = rubricOf(courseId); long rubricId = n(rubric, "id");
-        var criteria = criteriaOf(rubricId);
-        var rows = rows("""
-            SELECT t.id AS team_id, t.name AS team_name,
-                   p.id AS project_id, p.name AS project_name,
-                   d.review_binding_id AS binding_id, b.version_id,
-                   s.id AS sheet_id, s.status AS sheet_status,
-                   s.submitted_at, s.graded_by,
-                   u.display_name AS graded_by_name,
-                   r.id AS roster_id, r.member_ids
-            FROM project_team t
-            JOIN course_project p ON p.id=t.project_id
-            JOIN team_delivery d ON d.team_id=t.id
-            JOIN submission_review_binding b ON b.id=d.review_binding_id
-            LEFT JOIN grading_sheet s ON s.team_id=t.id AND s.rubric_id=? AND s.status='SUBMITTED'
-            LEFT JOIN app_user u ON u.id=s.graded_by
-            LEFT JOIN grade_roster r ON r.team_id=t.id AND r.rubric_id=?
-            WHERE p.course_id=?
-            ORDER BY t.id
-            """, rubricId, rubricId, courseId);
-        var out = new LinkedHashMap<String,Object>();
-        out.put("rubric", clean(rubric)); out.put("criteria", criteria);
-        var teams = new ArrayList<Map<String,Object>>();
-        for(var row : rows){
-            long teamId = n(row, "team_id");
-            var tr = new LinkedHashMap<>(row);
-            // teacher total: sum criterion scores
-            Integer teacherTotal = null;
-            if(row.get("sheet_id")!=null){
-                long sid = n(row, "sheet_id");
-                var scRows = db.queryForList("SELECT score FROM grading_criterion_score WHERE sheet_id=?", sid);
-                teacherTotal = scRows.stream().mapToInt(r2 -> ni(r2, "score")).sum();
+    public Map<String,Object> summary(long user,long courseId){
+        permission.requireTeacher(user,courseId);var out=new LinkedHashMap<String,Object>();var result=new ArrayList<Map<String,Object>>();
+        for(var team:eligibleTeams(courseId)){
+            long tid=n(team,"id");var tr=new LinkedHashMap<String,Object>();tr.put("team_id",tid);tr.put("team_name",team.get("name"));tr.put("project_id",team.get("project_id"));tr.put("project_name",team.get("project_name"));
+            var errors=new ArrayList<String>();Map<String,Object> rubric;
+            try{rubric=rubricForProject(courseId,n(team,"project_id"));}catch(BusinessException e){rubric=Map.of("id",-1L,"teacher_weight",70,"peer_weight",30);errors.add("项目未配置评分标准");}
+            long rid=n(rubric,"id");int tw=teacherWeight(n(team,"project_id"),rubric),pw=100-tw;
+            var d=db.queryForList("SELECT * FROM team_delivery WHERE team_id=?",tid);Object binding=d.isEmpty()?null:d.getFirst().get("review_binding_id");
+            var ss=db.queryForList("SELECT * FROM grading_sheet WHERE team_id=? AND rubric_id=? AND status='SUBMITTED'",tid,rid);var roster=db.queryForList("SELECT * FROM grade_roster WHERE team_id=? AND rubric_id=?",tid,rid);
+            Double tt=null,pt=null;boolean pending=pw>0;
+            if(binding==null)errors.add("缺被评版本，请先到成果与版本确认");
+            else if(pw==0)pt=0.0;
+            else try{pt=peerTotal(((Number)binding).longValue());pending=false;}catch(BusinessException e){errors.add(e.getMessage());}
+            if(tw==0)tt=0.0;
+            else if(ss.isEmpty())errors.add("教师评分尚未正式提交");else{
+                tt=db.queryForList("SELECT score FROM grading_criterion_score WHERE sheet_id=?",ss.getFirst().get("id")).stream().mapToDouble(x->ni(x,"score")).sum();
+                if(!Objects.equals(ss.getFirst().get("review_binding_id"),binding))errors.add("教师评分对应旧被评版本，须重新评分");
             }
-            tr.put("teacher_total", teacherTotal);
-            // peer total: avg of all submitted reviews for this binding
-            Long bindingId = row.get("binding_id")==null ? null : n(row, "binding_id");
-            Double peerAvg = null;
-            boolean peerMissing = false;
-            if(bindingId!=null){
-                var peerRows = db.queryForList("SELECT score FROM review_submission WHERE binding_id=? ORDER BY id", bindingId);
-                if(peerRows.isEmpty()) peerMissing = true;
-                else peerAvg = peerRows.stream().mapToInt(r2 -> ni(r2, "score")).average().orElse(0);
-            } else peerMissing = true;
-            tr.put("peer_avg", peerAvg==null ? null : Math.round(peerAvg * 100.0) / 100.0);
-            tr.put("peer_missing", peerMissing);
-            // final
-            int tw = ni(rubric, "teacher_weight")>0 ? ni(rubric, "teacher_weight") : 70;
-            int pw = 100 - tw;
-            Double finalScore = null;
-            if(teacherTotal!=null && peerAvg!=null)
-                finalScore = Math.round((teacherTotal * tw / 100.0 + peerAvg * pw / 100.0) * 100.0) / 100.0;
-            tr.put("final_total", finalScore);
-            tr.put("teacher_weight", tw); tr.put("peer_weight", pw);
-            // exceptions
-            var excs = new ArrayList<String>();
-            if(bindingId==null) excs.add("缺被评版本，请先到成果与版本确认");
-            else if(peerMissing) excs.add("互评未完成，所有学生的评审提交后才可发布");
-            if(row.get("sheet_id")==null) excs.add("教师评分尚未正式提交");
-            if(row.get("roster_id")==null) excs.add("计分名单尚未核对");
-            tr.put("exceptions", excs);
-            // published status
-            var pub = db.queryForList("SELECT * FROM grade_result WHERE team_id=? AND rubric_id=? ORDER BY version_no DESC LIMIT 1", teamId, rubricId);
-            if(!pub.isEmpty()){
-                var p = clean(pub.getFirst());
-                tr.put("published", p);
-                var members = rows("SELECT gm.*, u.display_name FROM grade_member_result gm JOIN app_user u ON u.id=gm.user_id WHERE gm.result_id=? ORDER BY gm.id", n(p, "id"));
-                tr.put("member_results", members);
-            } else { tr.put("published", null); tr.put("member_results", List.of()); }
-            teams.add(tr);
+            if(roster.isEmpty())errors.add("计分名单尚未核对");
+            tr.put("binding_id",binding);tr.put("sheet_id",ss.isEmpty()?null:ss.getFirst().get("id"));tr.put("roster_id",roster.isEmpty()?null:roster.getFirst().get("id"));tr.put("member_ids",roster.isEmpty()?null:roster.getFirst().get("member_ids"));
+            tr.put("teacher_total",tt);tr.put("peer_avg",pt);tr.put("peer_missing",pending);tr.put("teacher_weight",tw);tr.put("peer_weight",pw);tr.put("final_total",tt!=null&&pt!=null?weighted(tt,pt,tw,pw):null);tr.put("exceptions",errors);
+            var pub=db.queryForList("SELECT * FROM grade_result WHERE team_id=? ORDER BY version_no DESC LIMIT 1",tid);
+            tr.put("published",pub.isEmpty()?null:clean(pub.getFirst()));tr.put("member_results",pub.isEmpty()?List.of():rows("SELECT gm.*,u.display_name FROM grade_member_result gm JOIN app_user u ON u.id=gm.user_id WHERE gm.result_id=? ORDER BY gm.id",pub.getFirst().get("id")));
+            result.add(tr);
         }
-        out.put("teams", teams);
-        out.put("serverTime", now().toString());
-        return out;
+        out.put("teams",result);out.put("serverTime",now().toString());out.put("rubric",Map.of("teacher_weight",70,"peer_weight",30));out.put("criteria",List.of());return out;
     }
 
     @Transactional
@@ -153,82 +140,60 @@ public class GradingService {
         var ids = members.stream().map(m -> n(m, "id")).sorted().toList();
         var idsText = new StringBuilder();
         for(long id : ids){ if(!idsText.isEmpty()) idsText.append(','); idsText.append(id); }
-        db.update("DELETE FROM grade_roster WHERE team_id=?", teamId);
-        db.update("INSERT INTO grade_roster(team_id,rubric_id,member_ids,confirmed_by,confirmed_at) VALUES(?,?,?,?,?)",
-            teamId, rubricId, idsText.toString(), user, now());
+        var old=db.queryForList("SELECT * FROM grade_roster WHERE team_id=?",teamId);
+        if(old.isEmpty())db.update("INSERT INTO grade_roster(team_id,rubric_id,member_ids,confirmed_by,confirmed_at) VALUES(?,?,?,?,?)",teamId,rubricId,idsText.toString(),user,now());
+        else {
+            if(db.queryForObject("SELECT COUNT(*) FROM grade_result WHERE team_id=?",Long.class,teamId)>0)
+                check(old.getFirst().get("member_ids").equals(idsText.toString())&&n(old.getFirst(),"rubric_id")==rubricId,"ROSTER_FROZEN","成绩已发布，原计分名单须保留");
+            else db.update("UPDATE grade_roster SET rubric_id=?,member_ids=?,confirmed_by=?,confirmed_at=? WHERE team_id=?",rubricId,idsText.toString(),user,now(),teamId);
+        }
         event(c, "ROSTER_CONFIRMED", "roster:"+teamId, "核对计分名单("+members.size()+"人)", Map.of(), Map.of("memberCount", (Object)members.size()));
         return Map.of("teamId", teamId, "memberCount", members.size(), "members", members.stream().map(GradingService::clean).toList());
     }
 
-    public record PublishInput(String reason){}
+    public record PublishInput(String reason,Long teamId){
+        public PublishInput(String reason){this(reason,null);}
+    }
 
-    @Transactional
-    public Map<String,Object> publish(long user, long courseId, PublishInput in){
-        permission.requireTeacher(user, courseId);
-        var rubric = rubricOf(courseId); long rubricId = n(rubric, "id");
-        var rows = db.queryForList("""
-            SELECT t.id AS team_id, d.review_binding_id, s.id AS sheet_id, r.id AS roster_id
-            FROM project_team t
-            JOIN course_project p ON p.id=t.project_id
-            JOIN team_delivery d ON d.team_id=t.id
-            LEFT JOIN grading_sheet s ON s.team_id=t.id AND s.rubric_id=? AND s.status='SUBMITTED'
-            LEFT JOIN grade_roster r ON r.team_id=t.id AND r.rubric_id=?
-            WHERE p.course_id=?
-            """, rubricId, rubricId, courseId);
-        check(!rows.isEmpty(), "NO_TEAMS_TO_PUBLISH", "没有可发布的团队");
-        int tw = ni(rubric, "teacher_weight")>0 ? ni(rubric, "teacher_weight") : 70;
-        int pw = 100 - tw;
-        int published = 0;
-        for(var row : rows){
-            long teamId = n(row, "team_id");
-            Long sheetId = row.get("sheet_id")==null ? null : n(row, "sheet_id");
-            Long rosterId = row.get("roster_id")==null ? null : n(row, "roster_id");
-            Long bindingId = row.get("review_binding_id")==null ? null : n(row, "review_binding_id");
-            // validate
-            check(bindingId!=null, "MISSING_BINDING_TEAM_"+teamId, "团队#"+teamId+"缺少被评版本");
-            check(sheetId!=null, "MISSING_TEACHER_SCORE_"+teamId, "团队#"+teamId+"教师评分未提交");
-            check(rosterId!=null, "MISSING_ROSTER_"+teamId, "团队#"+teamId+"计分名单未核对");
-            var peerRows = db.queryForList("SELECT score FROM review_submission WHERE binding_id=?", bindingId);
-            check(!peerRows.isEmpty(), "MISSING_PEER_SCORE_"+teamId, "团队#"+teamId+"互评未完成或评分缺失");
-            // compute
-            var scRows = db.queryForList("SELECT score FROM grading_criterion_score WHERE sheet_id=?", sheetId);
-            double teacherTotal = scRows.stream().mapToInt(r2 -> ni(r2, "score")).sum();
-            double peerAvg = peerRows.stream().mapToInt(r2 -> ni(r2, "score")).average().orElse(0);
-            double finalScore = Math.round((teacherTotal * tw / 100.0 + peerAvg * pw / 100.0) * 100.0) / 100.0;
-            long resultId = insert("INSERT INTO grade_result(course_id,team_id,rubric_id,sheet_id,roster_id,teacher_total,peer_total,final_total,teacher_weight,peer_weight,status,version_no,published_by,published_at) VALUES(?,?,?,?,?,?,?,?,?,?,'PUBLISHED',1,?,?)",
-                courseId, teamId, rubricId, sheetId, rosterId, teacherTotal, Math.round(peerAvg*100.0)/100.0, finalScore, tw, pw, user, now());
-            // write member results (same score for all)
-            var roster = one("SELECT member_ids FROM grade_roster WHERE id=?", "ROSTER_NOT_FOUND", rosterId);
-            for(var idStr : roster.get("member_ids").toString().split(",")){
-                long mid = Long.parseLong(idStr.trim());
-                db.update("INSERT INTO grade_member_result(result_id,user_id,final_total) VALUES(?,?,?)", resultId, mid, finalScore);
-            }
-            published++;
+    @Transactional public Map<String,Object> publish(long user,long courseId,PublishInput in){
+        permission.requireTeacher(user,courseId);check(in!=null&&in.reason()!=null&&!in.reason().isBlank(),"REASON_REQUIRED","成绩发布须填写说明");
+        int count=0;
+        var eligible=eligibleTeams(courseId);
+        if(in.teamId()!=null){
+            eligible=eligible.stream().filter(t->n(t,"id")==in.teamId()).toList();
+            check(!eligible.isEmpty(),"TEAM_NOT_ELIGIBLE","团队不在本课程可发布范围");
         }
-        check(in.reason()!=null && !in.reason().isBlank(), "REASON_REQUIRED", "成绩发布须填写发布说明");
-        audit.append(user, courseId, "GRADE_PUBLISHED", "course:"+courseId, "发布成绩（"+published+"个团队），"+in.reason().strip());
-        return Map.of("publishedTeams", published, "reason", in.reason().strip());
+        for(var t:eligible){
+            long tid=n(t,"id");var c=ctx(user,tid,true);
+            if(db.queryForObject("SELECT COUNT(*) FROM grade_result WHERE team_id=?",Long.class,tid)>0)continue;
+            int tw=teacherWeight(n(c.project,"id"),c.rubric),pw=100-tw;
+            Long sid=tw==0?null:n(currentSheet(c),"id");
+            long rid=n(c.rubric,"id"),binding=n(c.binding,"id");
+            var roster=one("SELECT * FROM grade_roster WHERE team_id=? AND rubric_id=?","MISSING_ROSTER",tid,rid);
+            String currentMembers=gateway.members(tid,courseId).stream().map(m->n(m,"id")).sorted().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
+            check(roster.get("member_ids").equals(currentMembers),"ROSTER_STALE","团队成员已变化，请重新核对计分名单");
+            double tt=sid==null?0:teacherTotal(c,sid),pt=pw==0?0:peerTotal(binding),total=weighted(tt,pt,tw,pw);
+            long id=insert("INSERT INTO grade_result(course_id,team_id,rubric_id,sheet_id,roster_id,teacher_total,peer_total,final_total,teacher_weight,peer_weight,status,version_no,published_by,published_at) VALUES(?,?,?,?,?,?,?,?,?,?,'PUBLISHED',1,?,?)",courseId,tid,rid,sid,n(roster,"id"),tt,pt,total,tw,pw,user,now());
+            for(String member:roster.get("member_ids").toString().split(","))db.update("INSERT INTO grade_member_result(result_id,user_id,final_total) VALUES(?,?,?)",id,Long.parseLong(member),total);
+            snapshot(id,sid,binding,pw>0);event(c,"GRADE_PUBLISHED","result:"+id,in.reason(),Map.of(),Map.of("total",total));count++;
+        }
+        check(count>0,"NO_TEAMS_TO_PUBLISH","没有待发布的团队；已发布成绩请使用更正流程");return Map.of("publishedTeams",count);
     }
 
     public record CorrectInput(String reason){}
 
-    @Transactional
-    public Map<String,Object> correct(long user, long resultId, CorrectInput in){
-        check(in.reason()!=null && !in.reason().isBlank(), "REASON_REQUIRED", "成绩更正必须填写原因");
-        var old = one("SELECT * FROM grade_result WHERE id=? AND status='PUBLISHED'", "RESULT_NOT_FOUND_OR_NOT_PUBLISHED", resultId);
-        long courseId = n(old, "course_id");
-        permission.requireTeacher(user, courseId);
-        long teamId = n(old, "team_id");
-        int nextVersion = ni(old, "version_no") + 1;
-        long newId = insert("INSERT INTO grade_result(course_id,team_id,rubric_id,sheet_id,roster_id,teacher_total,peer_total,final_total,teacher_weight,peer_weight,status,version_no,parent_id,correction_reason,published_by,published_at) VALUES(?,?,?,?,?,?,?,?,?,?,'CORRECTED',?,?,?,?,?)",
-            courseId, teamId, n(old, "rubric_id"), n(old, "sheet_id"), n(old, "roster_id"),
-            ((Number)old.get("teacher_total")).doubleValue(), ((Number)old.get("peer_total")).doubleValue(),
-            ((Number)old.get("final_total")).doubleValue(), ni(old, "teacher_weight"), ni(old, "peer_weight"),
-            nextVersion, resultId, in.reason().strip(), user, now());
-        for(var member : db.queryForList("SELECT * FROM grade_member_result WHERE result_id=?", resultId))
-            db.update("INSERT INTO grade_member_result(result_id,user_id,final_total) VALUES(?,?,?)", newId, n(member, "user_id"), ((Number)member.get("final_total")).doubleValue());
-        audit.append(user, courseId, "GRADE_CORRECTED", "result:"+resultId+"->"+newId, "成绩更正v"+nextVersion+"："+in.reason().strip());
-        return Map.of("correctedId", newId, "versionNo", nextVersion, "reason", in.reason().strip());
+    @Transactional public Map<String,Object> correct(long user,long resultId,CorrectInput in){
+        check(in!=null&&in.reason()!=null&&!in.reason().isBlank(),"REASON_REQUIRED","成绩更正必须填写原因");
+        var old=one("SELECT * FROM grade_result WHERE id=?","RESULT_NOT_FOUND",resultId);long tid=n(old,"team_id");var c=ctx(user,tid,true);
+        long latest=db.queryForObject("SELECT id FROM grade_result WHERE team_id=? ORDER BY version_no DESC LIMIT 1",Long.class,tid);
+        check(latest==resultId,"STALE_GRADE_RESULT","请对当前最新成绩版本发起更正");
+        check(n(old,"rubric_id")==n(c.rubric,"id"),"RUBRIC_FROZEN","更正须沿用已发布评分标准");
+        int tw=ni(old,"teacher_weight"),pw=ni(old,"peer_weight"),version=ni(old,"version_no")+1;
+        Long sid=tw==0?null:n(currentSheet(c),"id");
+        double tt=sid==null?0:teacherTotal(c,sid),pt=pw==0?0:peerTotal(n(c.binding,"id")),total=weighted(tt,pt,tw,pw);
+        long id=insert("INSERT INTO grade_result(course_id,team_id,rubric_id,sheet_id,roster_id,teacher_total,peer_total,final_total,teacher_weight,peer_weight,status,version_no,parent_id,correction_reason,published_by,published_at) VALUES(?,?,?,?,?,?,?,?,?,?,'CORRECTED',?,?,?,?,?)",c.courseId,tid,n(c.rubric,"id"),sid,n(old,"roster_id"),tt,pt,total,tw,pw,version,resultId,in.reason().strip(),user,now());
+        for(var m:db.queryForList("SELECT user_id FROM grade_member_result WHERE result_id=?",resultId))db.update("INSERT INTO grade_member_result(result_id,user_id,final_total) VALUES(?,?,?)",id,n(m,"user_id"),total);
+        snapshot(id,sid,n(c.binding,"id"),pw>0);event(c,"GRADE_CORRECTED","result:"+id,in.reason(),clean(old),Map.of("total",total,"parent",resultId));return Map.of("correctedId",id,"versionNo",version,"reason",in.reason());
     }
 
     /** Student: query my own grade results across courses (latest version per team). */
@@ -238,12 +203,16 @@ public class GradingService {
         var results = rows("""
             SELECT gr.id, gr.course_id, gr.team_id, gr.teacher_total, gr.peer_total, gr.final_total,
                    gr.teacher_weight, gr.peer_weight, gr.status, gr.version_no, gr.correction_reason, gr.published_at,
-                   t.name AS team_name, p.name AS project_name, c.name AS course_name
+                   t.name AS team_name, p.name AS project_name, c.name AS course_name,
+                   b.version_id AS evaluated_version_id, v.version_no AS evaluated_version_no
             FROM grade_member_result gm
             JOIN grade_result gr ON gr.id=gm.result_id
             JOIN project_team t ON t.id=gr.team_id
             JOIN course_project p ON p.id=t.project_id
             JOIN course c ON c.id=gr.course_id
+            JOIN course_membership cm ON cm.course_id=gr.course_id AND cm.user_id=gm.user_id AND cm.active=TRUE AND cm.role='STUDENT'
+            LEFT JOIN submission_review_binding b ON b.id=gr.review_binding_id
+            LEFT JOIN submission_version v ON v.id=b.version_id
             WHERE gm.user_id=? ORDER BY gr.team_id, gr.version_no DESC
             """, user);
         var latest = new LinkedHashMap<Long,Map<String,Object>>();
@@ -255,10 +224,19 @@ public class GradingService {
         return out;
     }
 
+    public Map<String,Object> evidence(long user,long id) {
+        var result=one("""
+            SELECT g.*,v.id AS evaluated_version_id,v.version_no AS evaluated_version_no
+            FROM grade_result g LEFT JOIN submission_review_binding b ON b.id=g.review_binding_id
+            LEFT JOIN submission_version v ON v.id=b.version_id WHERE g.id=?
+            ""","RESULT_NOT_FOUND",id);
+        permission.requireTeacher(user,n(result,"course_id"));
+        return clean(result);
+    }
+
     /** Export: CSV or XLSX. */
     public Export export(long user, long courseId, String format, String filenamePrefix){
         permission.requireTeacher(user, courseId);
-        var rubric = rubricOf(courseId); long rubricId = n(rubric, "id");
         var rows = rows("""
             SELECT t.name AS team_name, p.name AS project_name,
                    gr.teacher_total, gr.peer_total, gr.final_total,
@@ -268,18 +246,18 @@ public class GradingService {
             JOIN project_team t ON t.id=gr.team_id
             JOIN course_project p ON p.id=t.project_id
             JOIN app_user u ON u.id=gr.published_by
-            WHERE gr.course_id=? AND gr.rubric_id=?
+            WHERE gr.course_id=? AND NOT EXISTS(SELECT 1 FROM grade_result newer WHERE newer.team_id=gr.team_id AND newer.version_no>gr.version_no)
             ORDER BY t.id, gr.version_no DESC
-            """, courseId, rubricId);
+            """, courseId);
         var members = rows("""
             SELECT gm.*, t.name AS team_name, au.display_name
             FROM grade_member_result gm
             JOIN grade_result gr ON gr.id=gm.result_id
             JOIN project_team t ON t.id=gr.team_id
             JOIN app_user au ON au.id=gm.user_id
-            WHERE gr.course_id=? AND gr.rubric_id=?
+            WHERE gr.course_id=? AND NOT EXISTS(SELECT 1 FROM grade_result newer WHERE newer.team_id=gr.team_id AND newer.version_no>gr.version_no)
             ORDER BY t.id, gm.id
-            """, courseId, rubricId);
+            """, courseId);
         String prefix = filenamePrefix!=null && !filenamePrefix.isBlank() ? filenamePrefix : "grades_"+courseId;
         if("xlsx".equalsIgnoreCase(format)){
             try{
@@ -354,30 +332,14 @@ public class GradingService {
     // ────────── end Module 8 ──────────
 
     /** Teacher: pending list + active rubric. Student/TA: nothing to show until module 8 publishes. */
-    public Map<String,Object> overview(long user, long courseId){
-        var role = permission.requireMember(user, courseId);
-        var rubric = rubricOf(courseId);
-        var out = new LinkedHashMap<String,Object>();
-        out.put("role", role.name());
-        out.put("rubric", clean(rubric));
-        out.put("criteria", criteriaOf(n(rubric, "id")));
-        if(role == CourseRole.TEACHER){
-            out.put("teams", rows("""
-                SELECT t.id, t.name, p.id AS project_id, p.name AS project_name,
-                       b.id AS binding_id, b.version_id, b.confirmed_at,
-                       s.id AS sheet_id, s.status AS sheet_status, s.submitted_at, s.last_reason
-                FROM project_team t
-                JOIN course_project p ON p.id=t.project_id
-                JOIN team_delivery d ON d.team_id=t.id
-                JOIN submission_review_binding b ON b.id=d.review_binding_id
-                LEFT JOIN grading_sheet s ON s.team_id=t.id AND s.rubric_id=?
-                WHERE p.course_id=?
-                ORDER BY t.id
-                """, n(rubric, "id"), courseId));
-        } else {
-            out.put("teams", List.of());
+    public Map<String,Object> overview(long user,long courseId){
+        var role=permission.requireMember(user,courseId);var out=new LinkedHashMap<String,Object>();var ts=new ArrayList<Map<String,Object>>();
+        if(role==CourseRole.TEACHER)for(var t:eligibleTeams(courseId)){
+            var binds=db.queryForList("SELECT b.* FROM team_delivery d JOIN submission_review_binding b ON b.id=d.review_binding_id WHERE d.team_id=?",t.get("id"));if(binds.isEmpty())continue;
+            var row=new LinkedHashMap<String,Object>(t);row.put("project_name",t.get("project_name"));var b=binds.getFirst();row.put("binding_id",b.get("id"));row.put("version_id",b.get("version_id"));row.put("confirmed_at",b.get("confirmed_at"));
+            try{var r=rubricForProject(courseId,n(t,"project_id"));var sheets=db.queryForList("SELECT * FROM grading_sheet WHERE team_id=? AND rubric_id=?",t.get("id"),r.get("id"));if(!sheets.isEmpty()){row.put("sheet_id",sheets.getFirst().get("id"));row.put("sheet_status",sheets.getFirst().get("status"));row.put("last_reason",sheets.getFirst().get("last_reason"));}}catch(BusinessException e){continue;}ts.add(row);
         }
-        return out;
+        out.put("role",role.name());out.put("teams",ts);out.put("rubric",Map.of("id",0,"name","按项目评分标准","teacher_weight",70,"peer_weight",30));out.put("criteria",List.of());return out;
     }
 
     /** Confirmed review version + its materials + active rubric + existing sheet/scores. */
@@ -422,8 +384,8 @@ public class GradingService {
             var sheet = existing.getFirst();
             sheetId = n(sheet, "id");
             before = clean(sheet);
-            db.update("UPDATE grading_sheet SET status=?,graded_by=?,submitted_at=?,last_reason=? WHERE id=?",
-                submit ? "SUBMITTED" : "DRAFT", user, submit ? now() : null, in.reason(), sheetId);
+            db.update("UPDATE grading_sheet SET status=?,graded_by=?,submitted_at=?,last_reason=?,review_binding_id=? WHERE id=?",
+                submit ? "SUBMITTED" : "DRAFT", user, submit ? now() : null, in.reason(), n(c.binding,"id"), sheetId);
             db.update("DELETE FROM grading_criterion_score WHERE sheet_id=?", sheetId);
         }
         for(var e : scores.entrySet())
@@ -443,7 +405,7 @@ public class GradingService {
         check(n(sheet, "rubric_id")==n(c.rubric, "id"), "RUBRIC_MISMATCH", "评分标准版本已变化，请刷新后重试");
         var scores = validateScores(c.criteria, in.scores(), true);
         var before = sheetSnapshot(sheetId);
-        db.update("UPDATE grading_sheet SET last_reason=? WHERE id=?", in.reason().strip(), sheetId);
+        db.update("UPDATE grading_sheet SET last_reason=?,review_binding_id=?,graded_by=?,submitted_at=? WHERE id=?", in.reason().strip(),n(c.binding,"id"),user,now(), sheetId);
         db.update("DELETE FROM grading_criterion_score WHERE sheet_id=?", sheetId);
         for(var e : scores.entrySet())
             db.update("INSERT INTO grading_criterion_score(sheet_id,criterion_id,score) VALUES(?,?,?)", sheetId, e.getKey(), e.getValue());

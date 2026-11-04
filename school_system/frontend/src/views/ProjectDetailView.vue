@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Calendar, User, List } from '@element-plus/icons-vue'
 import { getCourse, roleName, type Course } from '../api/courses'
-import { getProject, updateProject, publishProject, closeProject, archiveProject, statusName, type Project, type ProjectInput } from '../api/projects'
+import { getProject, getProjectChanges, type ProjectChange, updateProject, publishProject, closeProject, archiveProject, startProject, endProject, statusName, type Project, type ProjectInput } from '../api/projects'
 import ProjectForm from '../components/ProjectForm.vue'
 
 const route = useRoute(); const router = useRouter()
@@ -15,10 +15,13 @@ const loading = ref(true); const failed = ref(false)
 const editing = ref(false); const saving = ref(false); const acting = ref(false)
 const formInitial = ref<ProjectInput | null>(null)
 
+const changes = ref<ProjectChange[]>([])
+const changedAt = (value: string | null) => value ? new Date(value).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '—'
 onMounted(async () => {
   try {
     course.value = await getCourse(courseId)
     project.value = await getProject(courseId, projectId)
+    changes.value = await getProjectChanges(courseId, projectId)
   } catch { failed.value = true } finally { loading.value = false }
 })
 
@@ -30,6 +33,7 @@ function openEdit() {
     title: project.value.title,
     description: project.value.description,
     deadline: project.value.deadline,
+    teacherWeight: project.value.teacherWeight, peerWeight: project.value.peerWeight,
     minTeamSize: project.value.minTeamSize,
     maxTeamSize: project.value.maxTeamSize,
     criteria: project.value.criteria.map(c => ({ name: c.name, weight: c.weight, description: c.description ?? '' }))
@@ -39,15 +43,17 @@ function openEdit() {
 
 async function save(input: ProjectInput) {
   saving.value = true
-  try { project.value = await updateProject(courseId, projectId, input); editing.value = false }
+  try { project.value = await updateProject(courseId, projectId, input); editing.value = false; changes.value = await getProjectChanges(courseId, projectId) }
   catch {} finally { saving.value = false }
 }
 
-async function run(action: 'publish' | 'close' | 'archive') {
+async function run(action: 'publish' | 'close' | 'archive' | 'start' | 'end') {
   acting.value = true
   try {
     if (action === 'publish') project.value = await publishProject(courseId, projectId)
     else if (action === 'close') project.value = await closeProject(courseId, projectId)
+    else if(action === 'start') project.value = await startProject(courseId,projectId)
+    else if(action === 'end') project.value = await endProject(courseId,projectId)
     else project.value = await archiveProject(courseId, projectId)
   } catch {} finally { acting.value = false }
 }
@@ -70,6 +76,19 @@ function goTeams() { router.push(`/courses/${courseId}/projects/${projectId}/tea
         <el-button type="primary" @click="goTeams">团队与成员</el-button>
       </div>
     </section>
+    <section v-if="changes.length" class="detail-panel">
+      <h3>项目变更记录</h3>
+      <el-collapse>
+        <el-collapse-item v-for="item in changes" :key="item.id" :title="`${changedAt(item.occurred_at)} · ${item.summary}`">
+          <p v-if="item.reason">变更原因 {{ item.reason }}</p>
+          <p v-if="item.before_title !== item.after_title">{{ item.before_title }} → {{ item.after_title }}</p>
+          <p v-if="item.before_description !== item.after_description">原要求 {{ item.before_description }}</p>
+          <p v-if="item.before_description !== item.after_description">更新后 {{ item.after_description }}</p>
+          <p>项目最终截止 {{ changedAt(item.before_deadline) }} → {{ changedAt(item.after_deadline) }}</p>
+          <p v-if="item.remediation_until">涉及 {{ item.affected_teams }} 个已提交团队，整改截止 {{ changedAt(item.remediation_until) }}</p>
+        </el-collapse-item>
+      </el-collapse>
+    </section>
 
     <div class="detail-panel">
       <div class="panel-row">
@@ -90,8 +109,10 @@ function goTeams() { router.push(`/courses/${courseId}/projects/${projectId}/tea
 
       <div v-if="isTeacher()" class="detail-actions">
         <el-button v-if="project.status === 'DRAFT'" type="primary" :loading="acting" @click="run('publish')">发布项目</el-button>
-        <el-button v-if="project.status === 'DRAFT' || project.status === 'PUBLISHED'" :loading="false" @click="openEdit">编辑</el-button>
-        <el-button v-if="project.status === 'PUBLISHED'" type="warning" :loading="acting" @click="run('close')">终止项目</el-button>
+        <el-button v-if="['DRAFT','PUBLISHED','IN_PROGRESS'].includes(project.status)" :loading="false" @click="openEdit">编辑</el-button>
+        <el-button v-if="['PUBLISHED','IN_PROGRESS','ENDED'].includes(project.status)" type="warning" :loading="acting" @click="run('close')">终止项目</el-button>
+        <el-button v-if="project.status === 'PUBLISHED'" @click="run('start')">开始项目</el-button>
+        <el-button v-if="project.status === 'IN_PROGRESS'" @click="run('end')">结束项目</el-button>
         <el-button v-if="project.status !== 'ARCHIVED'" :loading="acting" @click="run('archive')">归档</el-button>
       </div>
     </div>

@@ -28,6 +28,11 @@ public class ProjectController {
         return ApiResponse.ok(service.detail(user.id(), courseId, projectId));
     }
 
+    @GetMapping("/{projectId}/changes")
+    public ApiResponse<?> changes(@AuthenticationPrincipal UserPrincipal user,@PathVariable Long courseId,@PathVariable Long projectId){
+        return ApiResponse.ok(service.changes(user.id(),courseId,projectId));
+    }
+
     @PutMapping("/{projectId}")
     public ApiResponse<ProjectService.ProjectView> update(@AuthenticationPrincipal UserPrincipal user, @PathVariable Long courseId,
                                                           @PathVariable Long projectId, @RequestBody ProjectService.ProjectInput input) {
@@ -46,6 +51,8 @@ public class ProjectController {
         return ApiResponse.ok(service.close(user.id(), courseId, projectId));
     }
 
+    @PostMapping("/{projectId}/start") public ApiResponse<?> start(@AuthenticationPrincipal UserPrincipal u,@PathVariable Long courseId,@PathVariable Long projectId){return ApiResponse.ok(service.transition(u.id(),courseId,projectId,false));}
+    @PostMapping("/{projectId}/end") public ApiResponse<?> end(@AuthenticationPrincipal UserPrincipal u,@PathVariable Long courseId,@PathVariable Long projectId){return ApiResponse.ok(service.transition(u.id(),courseId,projectId,true));}
     @PostMapping("/{projectId}/archive")
     public ApiResponse<ProjectService.ProjectView> archive(@AuthenticationPrincipal UserPrincipal user, @PathVariable Long courseId,
                                                            @PathVariable Long projectId) {

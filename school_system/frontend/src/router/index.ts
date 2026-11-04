@@ -4,6 +4,8 @@ const router = createRouter({ history: createWebHistory(), routes: [
   { path: '/login', component: () => import('../views/LoginView.vue'), meta: { public: true } },
   { path: '/', component: () => import('../layouts/AppLayout.vue'), children: [
     { path: '', redirect: '/courses' },
+    { path: 'platform/retention', component: () => import('../views/RetentionView.vue'), meta: { title: '课程数据留存' } },
+    { path: 'platform/directory', component: () => import('../views/PlatformDirectoryView.vue'), meta: { title: '平台基础资料' } },
     { path: 'courses', component: () => import('../views/CoursesView.vue'), meta: { title: '我的课程' } },
     { path: 'courses/:id', component: () => import('../views/CourseDetailView.vue'), meta: { title: '课程空间' } },
     { path: 'courses/:courseId/projects', component: () => import('../views/ProjectsView.vue'), meta: { title: '课程项目' } },
@@ -14,6 +16,8 @@ const router = createRouter({ history: createWebHistory(), routes: [
     { path: 'modules/submissions', component: () => import('../views/SubmissionsView.vue'), meta: { title: '成果与版本' } },
     { path: 'modules/reviews', component: () => import('../views/ReviewView.vue'), meta: { title: '检查与互评' } },
     { path: 'modules/grades', component: () => import('../views/GradesView.vue'), meta: { title: '评分与成绩' } },
+    { path: 'modules/notifications', component: () => import('../views/NotificationsView.vue'), meta: { title: '站内通知' } },
+    { path: 'modules/history', component: () => import('../views/WorkflowHistoryView.vue'), meta: { title: '项目过程记录' } },
     { path: 'modules/:module', component: () => import('../views/ModuleView.vue'), meta: { title: '业务模块' } }
   ] },
   { path: '/:pathMatch(.*)*', component: () => import('../views/NotFoundView.vue'), meta: { public: true } }

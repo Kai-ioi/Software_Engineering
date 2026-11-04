@@ -34,6 +34,7 @@ public class InspectionService {
     private static void optionalText(String value,int max,String name){check(value==null||value.length()<=max,"INVALID_INSPECTION",name+"不得超过"+max+"字");}
     private Context context(long user,long teamId,boolean lock){
         var tr=gateway.team(teamId,lock);var p=gateway.project(n(tr,"project_id"));var role=permission.requireMember(user,n(p,"course_id"));
+        permission.requireTeamScope(role,user,teamId);
         boolean member=gateway.member(teamId,user);
         if(role==CourseRole.STUDENT&&!member)deny("只能查看本团队的检查记录");
         return new Context(user,tr,p,role,member);
@@ -42,6 +43,7 @@ public class InspectionService {
         var role=permission.requireMember(user,courseId);
         String sql="SELECT t.id,t.name,t.project_id,p.name AS project_name,p.status AS project_status,p.demo_fixture FROM project_team t JOIN course_project p ON p.id=t.project_id WHERE p.course_id=?";
         if(role==CourseRole.STUDENT)return db.queryForList(sql+" AND EXISTS(SELECT 1 FROM project_team_member m WHERE m.team_id=t.id AND m.user_id=? AND m.active=TRUE) ORDER BY t.id",courseId,user);
+        if(role==CourseRole.TA)return db.queryForList(sql+CoursePermission.ASSISTANT_TEAM_FILTER+" ORDER BY t.id",courseId,user);
         return db.queryForList(sql+" ORDER BY t.id",courseId);
     }
     public Map<String,Object> workspace(long user,long teamId){
@@ -51,19 +53,47 @@ public class InspectionService {
         out.put("role",c.role.name());out.put("isTA",c.role==CourseRole.TA);out.put("isTeacher",c.role==CourseRole.TEACHER);
         out.put("isStudent",c.role==CourseRole.STUDENT);out.put("isLeader",c.leader());
         out.put("serverTime",now().toString());
+        out.put("missing",missing(c));
+        out.put("progress",rows("""
+            SELECT i.id,i.name,i.status,
+                   (SELECT COUNT(*) FROM team_task t WHERE t.iteration_id=i.id) AS task_count,
+                   (SELECT COUNT(*) FROM team_task t WHERE t.iteration_id=i.id AND t.status='COMPLETED') AS completed_count
+            FROM team_iteration i WHERE i.team_id=? ORDER BY i.id
+            """,teamId));
         out.put("versions",rows("SELECT v.*,u.display_name AS submitter_name,i.name AS iteration_name FROM submission_version v JOIN app_user u ON u.id=v.submitted_by JOIN team_iteration i ON i.id=v.iteration_id WHERE v.team_id=? ORDER BY v.id DESC",teamId));
         out.put("binding",rows("SELECT d.review_binding_id AS binding_id,b.version_id,v.version_no FROM team_delivery d LEFT JOIN submission_review_binding b ON b.id=d.review_binding_id LEFT JOIN submission_version v ON v.id=b.version_id WHERE d.team_id=?",teamId));
         out.put("inspections",rows("SELECT i.*,u.display_name AS checker_name FROM inspection i JOIN app_user u ON u.id=i.checker_id WHERE i.team_id=? ORDER BY i.id DESC",teamId));
         return out;
     }
-    public record CreateInput(long versionId,String conclusion,String feedback,boolean rectificationRequired,boolean reported,Long parentId){}
+    private boolean missing(Context c){
+        return c.project.get("final_deadline") instanceof OffsetDateTime deadline
+            && !now().isBefore(deadline)
+            && db.queryForObject("SELECT COUNT(*) FROM submission_version WHERE team_id=?",Long.class,c.teamId())==0;
+    }
+    public record CreateInput(Long versionId,String conclusion,String feedback,boolean rectificationRequired,boolean reported,Long parentId){}
     @Transactional public long create(long user,long teamId,CreateInput in){
         var c=context(user,teamId,true);
         if(c.role!=CourseRole.TA)deny("过程检查由本课程助教执行，助教不能正式评分");
-        one("SELECT id FROM submission_version WHERE id=? AND team_id=?","VERSION_NOT_FOUND",in.versionId,teamId);
+        check(Set.of("PUBLISHED","IN_PROGRESS","ENDED").contains(c.project.get("status")),"PROJECT_READ_ONLY","当前项目状态不允许登记检查");
+        if(in.versionId==null){
+            check(in.reported&&!in.rectificationRequired&&in.parentId==null&&missing(c),"MISSING_REPORT_NOT_ALLOWED","只有截止后仍无成果的团队可登记无版本缺交上报");
+        } else {
+            one("SELECT id FROM submission_version WHERE id=? AND team_id=?","VERSION_NOT_FOUND",in.versionId,teamId);
+        }
         text(in.conclusion,2000,"检查结论");
         if(in.rectificationRequired||in.reported)text(in.feedback,2000,"问题与整改反馈");else optionalText(in.feedback,2000,"问题与整改反馈");
-        if(in.parentId!=null)one("SELECT id FROM inspection WHERE id=? AND team_id=?","INSPECTION_NOT_FOUND",in.parentId,teamId);
+        if(in.parentId!=null){
+            var parent=one("SELECT * FROM inspection WHERE id=? AND team_id=?","INSPECTION_NOT_FOUND",in.parentId,teamId);
+            check(Boolean.TRUE.equals(parent.get("rectification_required")),"NOT_RECTIFICATION","仅需整改的检查可以复查");
+            check(db.queryForObject("""
+                SELECT COUNT(*) FROM submission_version newer JOIN submission_version older
+                  ON newer.iteration_id=older.iteration_id
+                WHERE newer.id=? AND older.id=? AND newer.version_no>older.version_no AND newer.accepted_at>=?
+                """,Long.class,in.versionId,parent.get("version_id"),parent.get("checked_at"))==1,
+                "NEW_VERSION_REQUIRED","请选择整改要求提出后重交的同一迭代新版本");
+            check(db.queryForObject("SELECT COUNT(*) FROM inspection WHERE parent_id=?",Long.class,in.parentId)==0,
+                "ALREADY_RECHECKED","该检查已有复查结论");
+        }
         long id=insert("INSERT INTO inspection(team_id,version_id,checker_id,conclusion,feedback,rectification_required,reported,checked_at,parent_id) VALUES(?,?,?,?,?,?,?,?,?)",teamId,in.versionId,user,in.conclusion.strip(),in.feedback==null||in.feedback.isBlank()?null:in.feedback.strip(),in.rectificationRequired,in.reported,now(),in.parentId);
         audit.append(user,c.courseId(),"INSPECTION_CREATED","inspection:"+id,"助教检查团队#"+teamId+(in.rectificationRequired?"（要求整改）":"")+(in.reported?"（问题上报）":""));
         return id;

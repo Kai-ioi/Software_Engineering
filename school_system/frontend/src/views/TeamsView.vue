@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Plus, User, List } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getProject, type Project } from '../api/projects'
-import { getTeams, createTeam, type Team } from '../api/teams'
+import { getTeams, createTeam, getWindow, saveWindow, type Team, type GroupingWindow } from '../api/teams'
 
 const route = useRoute(); const router = useRouter()
 const courseId = Number(route.params.courseId)
@@ -14,13 +14,30 @@ const teams = ref<Team[]>([])
 const loading = ref(true); const failed = ref(false)
 const showCreate = ref(false); const name = ref(''); const creating = ref(false)
 
+const windowState = ref<GroupingWindow>()
+const showWindow = ref(false)
+const opens = ref('')
+const closes = ref('')
+function openWindow() {
+  opens.value = windowState.value?.opensAt?.slice(0, 16) || ''
+  closes.value = windowState.value?.closesAt?.slice(0, 16) || ''
+  showWindow.value = true
+}
+async function updateWindow() {
+  if (!opens.value || !closes.value) { ElMessage.warning('请填写开放和截止时间'); return }
+  try {
+    await saveWindow(courseId, projectId, opens.value + ':00+08:00', closes.value + ':00+08:00')
+    showWindow.value = false
+    await load()
+  } catch {}
+}
 onMounted(load)
 
 async function load() {
   loading.value = true; failed.value = false
   try {
     project.value = await getProject(courseId, projectId)
-    teams.value = await getTeams(courseId, projectId)
+    ;[teams.value, windowState.value] = await Promise.all([getTeams(courseId, projectId), getWindow(courseId, projectId)])
   } catch { failed.value = true } finally { loading.value = false }
 }
 
@@ -44,9 +61,18 @@ async function create() {
   <el-button text @click="router.push(`/courses/${courseId}/projects/${projectId}`)"><ArrowLeft class="button-icon"/>返回项目详情</el-button>
   <section class="page-heading detail-heading">
     <div><span class="eyebrow">PROJECT TEAMS</span><h1>团队与成员</h1><p class="muted">{{ project ? project.title + ' · ' + project.minTeamSize + '-' + project.maxTeamSize + ' 人/队' : '课程团队' }}</p></div>
-    <el-button type="primary" @click="showCreate = true"><Plus class="button-icon"/>创建团队</el-button>
+    <el-button v-if="project?.myRole === 'STUDENT' && windowState?.open" type="primary" @click="showCreate = true"><Plus class="button-icon"/>创建团队</el-button>
   </section>
 
+  <p v-if="windowState" class="muted">组队窗口（北京时间） {{ windowState.opensAt?.slice(0, 16).replace('T', ' ') || '项目发布时' }} 至 {{ windowState.closesAt?.slice(0, 16).replace('T', ' ') || '尚未设置' }}</p>
+  <el-button v-if="project?.myRole === 'TEACHER'" @click="openWindow">设置组队窗口</el-button>
+  <el-dialog v-model="showWindow" title="组队窗口（北京时间）" width="440px">
+    <el-form label-position="top" @submit.prevent="updateWindow">
+      <el-form-item label="开放时间"><input v-model="opens" type="datetime-local"></el-form-item>
+      <el-form-item label="截止时间"><input v-model="closes" type="datetime-local"></el-form-item>
+      <el-button type="primary" native-type="submit">保存</el-button>
+    </el-form>
+  </el-dialog>
   <div v-if="loading" class="state-panel">正在加载团队…</div>
   <div v-else-if="failed" class="state-panel"><p>团队加载失败，请检查服务后重试。</p><el-button @click="load">重新加载</el-button></div>
   <div v-else-if="teams.length" class="project-grid">

@@ -91,3 +91,29 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 ## 下一步
 
 先接入项目发布和组队，再开发迭代任务、正式提交与版本、互评检查、评分成绩。详见 `docs/框架与后续接入.md`。
+
+
+### 项目与团队共享数据（2026-11-03联调修复）
+
+项目、团队、成员统一使用 `course_project`、`project_team`、`project_team_member`。项目管理发布的要求直接供迭代任务引用；成员审批、退出、负责人交接直接影响任务及成果权限。项目状态统一为草稿、已发布、进行中、已结束、已终止、已归档。
+
+项目评分维度和教师/互评权重在项目页配置，发布时生成供评分模块使用的版本快照；正式互评或评分开始后冻结配置。评分页面按所选团队的项目标准加载。成绩发布须完成被评版本、教师评分、互评/复核及名单核对；更正重算成绩并保留旧结果、名单和计算快照，导出采用最新成绩版本。
+
+升级前停止后端并备份 `backend/.runtime/demo-db.mv.db` 及文件目录。正常启动将自动执行V9/V10：原A模块表保留为 `legacy_*`，通过映射表把原项目、团队、成员迁入共享数据；既有成果、评审和成绩引用不变。禁止通过删除数据库、修改已执行迁移脚本或手工替换ID来升级。旧演示项目的评分历史沿用原标准，新建项目按发布的项目标准评分。
+
+回归证据：`docs/verification/shared-workflow/result.json`。测试：`CrossModuleAuditTest`、`SharedWorkflowIntegrationTest`、`SharedDataMigrationTest`。
+
+### 本地 H2 与附件备份
+
+先停止后端，确认没有写入，再从项目目录执行下列命令。按实际运行目录修改路径。备份存放在运行目录之外，恢复使用全新的空目标路径。
+
+```powershell
+python scripts/demo_backup.py backup backend/.runtime D:/backup/school-demo.zip
+python scripts/demo_backup.py restore D:/backup/recovered-runtime D:/backup/school-demo.zip
+```
+
+恢复时先验证解包后的数据库能打开，并核对成果、评审、成绩关联及附件下载，再将应用配置指向恢复目录。脚本校验所有归档文件的 SHA-256。自定义附件存放路径需要在备份前随数据库一致性停机，并将附件目录纳入备份。
+
+### 课程留存管理
+
+由管理员在「课程数据留存」登记课程结束。部署时将 `RETENTION_APPROVER` 设为业务审批人的登录名。满两年且无未结争议的课程可申请批准清理。执行账号须是另一位平台管理员。系统先展示清理范围，执行后记录审批、清理及附件处理结果。请先备份再处理真实课程。

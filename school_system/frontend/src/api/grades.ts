@@ -37,7 +37,7 @@ export interface SummaryTeam {
 }
 export interface Summary { rubric: Rubric; criteria: Criterion[]; teams: SummaryTeam[]; serverTime: string }
 export interface RosterResult { teamId: number; memberCount: number; members: { id: number; display_name: string; username: string }[] }
-export interface MyGrade { results: { id: number; course_id: number; team_id: number; teacher_total: number; peer_total: number; final_total: number; teacher_weight: number; peer_weight: number; status: string; version_no: number; correction_reason: string | null; published_at: string; team_name: string; project_name: string; course_name: string }[] }
+export interface MyGrade { results: { id: number; course_id: number; team_id: number; teacher_total: number; peer_total: number; final_total: number; teacher_weight: number; peer_weight: number; status: string; version_no: number; correction_reason: string | null; published_at: string; team_name: string; project_name: string; course_name: string; evaluated_version_no: number | null }[] }
 
 export const getOverview = (course: number) => request<Overview>(`/grades/courses/${course}`)
 export const getTeamSheet = (team: number) => request<TeamSheet>(`/grades/teams/${team}`)
@@ -50,7 +50,12 @@ export const modify = (sheet: number, scores: ScoreItem[], reason: string) =>
 
 export const getSummary = (course: number) => request<Summary>(`/grades/courses/${course}/summary`)
 export const confirmRoster = (team: number) => request<RosterResult>(`/grades/teams/${team}/roster`, { method: 'POST' })
-export const publish = (course: number, reason: string) => request<{ publishedTeams: number }>(`/grades/courses/${course}/publish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) })
+export const publish = (course: number, reason: string, teamId?: number) => request<{ publishedTeams: number }>(`/grades/courses/${course}/publish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason, teamId }) })
 export const correct = (result: number, reason: string) => request<{ correctedId: number; versionNo: number }>(`/grades/results/${result}/correct`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) })
 export const getMyGrades = () => request<MyGrade>('/grades/my')
 export const exportUrl = (course: number, format = 'csv', filename = '') => `/api/grades/courses/${course}/export?format=${format}&filename=${encodeURIComponent(filename || 'grades')}`
+export interface GradeEvidence {
+  id: number; version_no: number; evaluated_version_id: number | null; evaluated_version_no: number | null;
+  score_snapshot: string | null; peer_snapshot: string | null; parent_id: number | null
+}
+export const getGradeEvidence = (id: number) => request<GradeEvidence>(`/grades/results/${id}/evidence`)

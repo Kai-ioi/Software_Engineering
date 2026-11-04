@@ -27,6 +27,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 })
 @AutoConfigureMockMvc
 @ActiveProfiles("demo")
+@org.springframework.transaction.annotation.Transactional
 class TeamIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
@@ -36,7 +37,7 @@ class TeamIntegrationTest {
     @Autowired UserRepository users;
 
     @BeforeEach
-    void clean() { members.deleteAll(); teams.deleteAll(); projects.deleteAll(); }
+    void clean() {}
 
     record CsrfSession(MockHttpSession session, String header, String token) {}
 
@@ -111,7 +112,7 @@ class TeamIntegrationTest {
         var student = login("student01");
         var s = csrf(student);
         long teamId = createTeam(student, s, projectId, "飞虎队");
-        var assistant = login("assistant01");
+        var assistant = login("student03");
         apply(assistant, csrf(assistant), projectId, teamId);
         long memberId = pendingMemberId(student, projectId, teamId);
         mvc.perform(post(teamPath(projectId, teamId) + "/members/" + memberId + "/approve").session(student).header(s.header(), s.token()))
@@ -145,12 +146,12 @@ class TeamIntegrationTest {
         var student = login("student01");
         var s = csrf(student);
         long teamId = createTeam(student, s, projectId, "飞虎队");
-        var assistant = login("assistant01");
+        var assistant = login("student03");
         apply(assistant, csrf(assistant), projectId, teamId);
         long memberId = pendingMemberId(student, projectId, teamId);
         mvc.perform(post(teamPath(projectId, teamId) + "/members/" + memberId + "/approve").session(student).header(s.header(), s.token()))
             .andExpect(status().isOk());
-        long assistantId = userId("assistant01");
+        long assistantId = userId("student03");
         mvc.perform(post(teamPath(projectId, teamId) + "/transfer-leadership").session(student).header(s.header(), s.token())
             .contentType(MediaType.APPLICATION_JSON).content("{\"newLeaderUserId\":" + assistantId + "}"))
             .andExpect(status().isOk())
@@ -162,14 +163,15 @@ class TeamIntegrationTest {
         var student = login("student01");
         var s = csrf(student);
         long teamA = createTeam(student, s, projectId, "A队");
-        var assistant = login("assistant01");
+        var assistant = login("student03");
         apply(assistant, csrf(assistant), projectId, teamA);
         long memberId = pendingMemberId(student, projectId, teamA);
         mvc.perform(post(teamPath(projectId, teamA) + "/members/" + memberId + "/approve").session(student).header(s.header(), s.token()))
             .andExpect(status().isOk());
         var teacher = login("teacher01");
         var t = csrf(teacher);
-        long teamB = createTeam(teacher, t, projectId, "B队");
+        var other = login("student04");
+        long teamB = createTeam(other, csrf(other), projectId, "B队");
         mvc.perform(post(teamPath(projectId, teamA) + "/members/" + memberId + "/transfer").session(teacher).header(t.header(), t.token())
             .contentType(MediaType.APPLICATION_JSON).content("{\"targetTeamId\":" + teamB + "}"))
             .andExpect(status().isOk())

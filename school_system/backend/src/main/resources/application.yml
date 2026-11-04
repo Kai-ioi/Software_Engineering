@@ -33,6 +33,7 @@ spring:
       max-file-size: 50MB
       max-request-size: 52MB
 app:
+  retention-approver: ${RETENTION_APPROVER:}
   storage-root: ${STORAGE_ROOT:./.runtime/files}
   demo-password: ${DEMO_PASSWORD:Demo@2026!}
 springdoc:
