@@ -3,7 +3,7 @@ import { request } from './http'
 export interface Criterion { id: number; rubric_id: number; name: string; description: string; max_score: number; sort_order: number }
 export interface Rubric { id: number; course_id: number; name: string; version_no: number; active: boolean; created_at: string; teacher_weight: number; peer_weight: number }
 export interface GradeTeam {
-  id: number; name: string; project_id: number; project_name: string
+  id: number; name: string; project_id: number; project_name: string; demo_fixture: boolean
   binding_id: number; version_id: number; confirmed_at: string
   sheet_id: number | null; sheet_status: 'DRAFT' | 'SUBMITTED' | null; submitted_at: string | null; last_reason: string | null
 }
@@ -26,7 +26,7 @@ export interface SheetResult { sheet: { id: number; status: 'DRAFT' | 'SUBMITTED
 export interface PublishedResult { id: number; version_no: number; teacher_total: number; peer_total: number; final_total: number; teacher_weight: number; peer_weight: number; status: string; correction_reason: string | null; published_at: string }
 export interface MemberResult { id: number; result_id: number; user_id: number; display_name: string; final_total: number }
 export interface SummaryTeam {
-  team_id: number; team_name: string; project_id: number; project_name: string
+  team_id: number; team_name: string; project_id: number; project_name: string; demo_fixture: boolean
   binding_id: number; version_id: number
   sheet_id: number | null; sheet_status: string | null; submitted_at: string | null; graded_by: number | null; graded_by_name: string | null
   roster_id: number | null; member_ids: string | null
@@ -37,7 +37,7 @@ export interface SummaryTeam {
 }
 export interface Summary { rubric: Rubric; criteria: Criterion[]; teams: SummaryTeam[]; serverTime: string }
 export interface RosterResult { teamId: number; memberCount: number; members: { id: number; display_name: string; username: string }[] }
-export interface MyGrade { results: { id: number; course_id: number; team_id: number; teacher_total: number; peer_total: number; final_total: number; teacher_weight: number; peer_weight: number; status: string; version_no: number; correction_reason: string | null; published_at: string; team_name: string; project_name: string; course_name: string; evaluated_version_no: number | null }[] }
+export interface MyGrade { results: { id: number; course_id: number; team_id: number; teacher_total: number; peer_total: number; final_total: number; teacher_weight: number; peer_weight: number; status: string; version_no: number; correction_reason: string | null; published_at: string; team_name: string; project_id: number; project_name: string; course_name: string; evaluated_version_no: number | null }[] }
 
 export const getOverview = (course: number) => request<Overview>(`/grades/courses/${course}`)
 export const getTeamSheet = (team: number) => request<TeamSheet>(`/grades/teams/${team}`)
@@ -50,7 +50,7 @@ export const modify = (sheet: number, scores: ScoreItem[], reason: string) =>
 
 export const getSummary = (course: number) => request<Summary>(`/grades/courses/${course}/summary`)
 export const confirmRoster = (team: number) => request<RosterResult>(`/grades/teams/${team}/roster`, { method: 'POST' })
-export const publish = (course: number, reason: string, teamId?: number) => request<{ publishedTeams: number }>(`/grades/courses/${course}/publish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason, teamId }) })
+export const publish = (course: number, reason: string, teamId?: number, includeSamples?: boolean, projectId?: number) => request<{ publishedTeams: number }>(`/grades/courses/${course}/publish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason, teamId, includeSamples, projectId }) })
 export const correct = (result: number, reason: string) => request<{ correctedId: number; versionNo: number }>(`/grades/results/${result}/correct`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) })
 export const getMyGrades = () => request<MyGrade>('/grades/my')
 export const exportUrl = (course: number, format = 'csv', filename = '') => `/api/grades/courses/${course}/export?format=${format}&filename=${encodeURIComponent(filename || 'grades')}`

@@ -53,7 +53,7 @@ public class GradingService {
         }
         conflict("NO_RUBRIC","项目尚未发布完整评分标准，请到项目管理配置");return Map.of();
     }
-    private List<Map<String,Object>> eligibleTeams(long course){return db.queryForList("SELECT t.*,p.name AS project_name FROM project_team t JOIN course_project p ON p.id=t.project_id WHERE p.course_id=? AND p.status IN ('PUBLISHED','IN_PROGRESS','ENDED') ORDER BY t.id",course);}
+    private List<Map<String,Object>> eligibleTeams(long course){return db.queryForList("SELECT t.*,p.name AS project_name,p.demo_fixture FROM project_team t JOIN course_project p ON p.id=t.project_id WHERE p.course_id=? AND p.status IN ('PUBLISHED','IN_PROGRESS','ENDED') ORDER BY t.id",course);}
     private void peerComplete(long binding){
         check(db.queryForObject("SELECT COUNT(*) FROM review_task WHERE binding_id=? AND status='PENDING'",Long.class,binding)==0,"PEER_PENDING","仍有互评或重评任务未完成，不能发布或更正成绩");
         check(db.queryForObject("SELECT COUNT(*) FROM review_appeal WHERE binding_id=? AND status='PENDING'",Long.class,binding)==0,"APPEAL_PENDING","互评复核尚未处理，不能发布或更正成绩");
@@ -106,7 +106,7 @@ public class GradingService {
     public Map<String,Object> summary(long user,long courseId){
         permission.requireTeacher(user,courseId);var out=new LinkedHashMap<String,Object>();var result=new ArrayList<Map<String,Object>>();
         for(var team:eligibleTeams(courseId)){
-            long tid=n(team,"id");var tr=new LinkedHashMap<String,Object>();tr.put("team_id",tid);tr.put("team_name",team.get("name"));tr.put("project_id",team.get("project_id"));tr.put("project_name",team.get("project_name"));
+            long tid=n(team,"id");var tr=new LinkedHashMap<String,Object>();tr.put("team_id",tid);tr.put("team_name",team.get("name"));tr.put("project_id",team.get("project_id"));tr.put("project_name",team.get("project_name"));tr.put("demo_fixture",team.get("demo_fixture"));
             var errors=new ArrayList<String>();Map<String,Object> rubric;
             try{rubric=rubricForProject(courseId,n(team,"project_id"));}catch(BusinessException e){rubric=Map.of("id",-1L,"teacher_weight",70,"peer_weight",30);errors.add("项目未配置评分标准");}
             long rid=n(rubric,"id");int tw=teacherWeight(n(team,"project_id"),rubric),pw=100-tw;
@@ -151,18 +151,26 @@ public class GradingService {
         return Map.of("teamId", teamId, "memberCount", members.size(), "members", members.stream().map(GradingService::clean).toList());
     }
 
-    public record PublishInput(String reason,Long teamId){
-        public PublishInput(String reason){this(reason,null);}
+    public record PublishInput(String reason,Long teamId,Boolean includeSamples,Long projectId){
+        public PublishInput(String reason,Long teamId,Boolean includeSamples){this(reason,teamId,includeSamples,null);}
+        public PublishInput(String reason){this(reason,null,null);}
+        public PublishInput(String reason,Long teamId){this(reason,teamId,null);}
     }
 
     @Transactional public Map<String,Object> publish(long user,long courseId,PublishInput in){
         permission.requireTeacher(user,courseId);check(in!=null&&in.reason()!=null&&!in.reason().isBlank(),"REASON_REQUIRED","成绩发布须填写说明");
         int count=0;
         var eligible=eligibleTeams(courseId);
+        if(in.projectId()!=null){
+            check(db.queryForObject("SELECT COUNT(*) FROM course_project WHERE id=? AND course_id=?",Long.class,in.projectId(),courseId)>0,"PROJECT_NOT_FOUND","项目不属于当前课程");
+            eligible=eligible.stream().filter(t->n(t,"project_id")==in.projectId()).toList();
+        }
         if(in.teamId()!=null){
             eligible=eligible.stream().filter(t->n(t,"id")==in.teamId()).toList();
             check(!eligible.isEmpty(),"TEAM_NOT_ELIGIBLE","团队不在本课程可发布范围");
         }
+        if(in.teamId()==null && Boolean.FALSE.equals(in.includeSamples()))
+            eligible=eligible.stream().filter(t->!Boolean.TRUE.equals(t.get("demo_fixture"))).toList();
         for(var t:eligible){
             long tid=n(t,"id");var c=ctx(user,tid,true);
             if(db.queryForObject("SELECT COUNT(*) FROM grade_result WHERE team_id=?",Long.class,tid)>0)continue;
@@ -203,7 +211,7 @@ public class GradingService {
         var results = rows("""
             SELECT gr.id, gr.course_id, gr.team_id, gr.teacher_total, gr.peer_total, gr.final_total,
                    gr.teacher_weight, gr.peer_weight, gr.status, gr.version_no, gr.correction_reason, gr.published_at,
-                   t.name AS team_name, p.name AS project_name, c.name AS course_name,
+                   t.name AS team_name, p.id AS project_id, p.name AS project_name, c.name AS course_name,
                    b.version_id AS evaluated_version_id, v.version_no AS evaluated_version_no
             FROM grade_member_result gm
             JOIN grade_result gr ON gr.id=gm.result_id

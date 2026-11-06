@@ -22,6 +22,12 @@ public class TeamController {
         return ApiResponse.ok(service.configureWindow(user.id(),courseId,projectId,input));
     }
 
+    @GetMapping("/{teamId}/assignment-candidates")
+    public ApiResponse<?> assignmentCandidates(@AuthenticationPrincipal UserPrincipal user,@PathVariable Long courseId,
+            @PathVariable Long projectId,@PathVariable Long teamId) {
+        return ApiResponse.ok(service.assignmentCandidates(user.id(),courseId,projectId,teamId));
+    }
+
     @PostMapping("/{teamId}/assign")
     public ApiResponse<?> assign(@AuthenticationPrincipal UserPrincipal user,@PathVariable Long courseId,@PathVariable Long projectId,
                                  @PathVariable Long teamId,@RequestParam Long studentId) {

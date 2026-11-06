@@ -162,6 +162,8 @@ public class CourseRetention {
         delete("project_team_member","team_id IN ("+teams+")",id);
         delete("legacy_team_mapping","team_id IN ("+teams+")",id);
         delete("project_team","project_id IN ("+projects+")",id);
+        delete("course_team_member","team_id IN (SELECT id FROM course_team WHERE course_id=?)",id);
+        delete("course_team","course_id=?",id);
         for(String table:List.of("project_change","project_requirement","project_criterion","legacy_project_mapping"))
             delete(table,"project_id IN ("+projects+")",id);
         delete("course_project","course_id=?",id);

@@ -60,7 +60,7 @@ public class WorkflowHistory {
                 FROM expired_team_application e JOIN project_team_member m ON m.id=e.member_id WHERE m.team_id=?
               UNION ALL SELECT '成员',a.id,a.action,a.object_id,a.summary,a.occurred_at FROM audit_record a
                 WHERE a.course_id=? AND a.object_id=? AND a.action IN
-                ('TEAM_CREATED','TEAM_APPROVED','TEAM_ASSIGNED','TEAM_LEFT','TEAM_MEMBER_REMOVED','TEAM_LEADER_CHANGED','TEAM_MEMBER_MOVED')
+                ('TEAM_CREATED','TEAM_APPROVED','TEAM_ASSIGNED','TEAM_LEFT','TEAM_MEMBER_REMOVED','TEAM_LEADER_CHANGED','TEAM_MEMBER_MOVED','TEAM_MEMBERSHIP_REPAIRED','COURSE_TEAM_PROJECT_SELECTED')
             ) events WHERE (CAST(? AS VARCHAR(32)) IS NULL OR category=?) AND (CAST(? AS VARCHAR(100)) IS NULL OR object_ref=?)
             AND (CAST(? AS TIMESTAMP WITH TIME ZONE) IS NULL OR occurred_at<?
                 OR (occurred_at=? AND (category>? OR (category=? AND event_id<?))))

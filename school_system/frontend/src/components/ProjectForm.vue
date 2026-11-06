@@ -12,8 +12,8 @@ const changeReason = ref('')
 const remediationUntil = ref('')
 const description = ref('')
 const deadline = ref<Date | null>(null)
-const minTeamSize = ref(1)
-const maxTeamSize = ref(4)
+const minTeamSize = ref(3)
+const maxTeamSize = ref(5)
 const criteria = ref<{ name: string; weight: number; description: string }[]>([])
 
 watch(() => props.initial, fill, { immediate: true })
@@ -22,8 +22,8 @@ function fill(v?: ProjectInput | null) {
   title.value = v?.title ?? ''
   description.value = v?.description ?? ''
   deadline.value = v?.deadline ? new Date(v.deadline) : null
-  minTeamSize.value = v?.minTeamSize ?? 1
-  maxTeamSize.value = v?.maxTeamSize ?? 4
+  minTeamSize.value = v?.minTeamSize ?? 3
+  maxTeamSize.value = v?.maxTeamSize ?? 5
   criteria.value = v?.criteria?.map(c => ({ name: c.name, weight: c.weight, description: c.description ?? '' })) ?? []
 }
 
@@ -63,8 +63,8 @@ function submit() {
       <p class="form-hint">发布时会校验：截止时间须晚于当前时间。</p>
     </el-form-item>
     <div class="form-grid">
-      <el-form-item label="团队最少人数"><el-input-number v-model="minTeamSize" :min="1" :max="30" /></el-form-item>
-      <el-form-item label="团队最多人数"><el-input-number v-model="maxTeamSize" :min="1" :max="30" /></el-form-item>
+      <el-form-item label="组队方式"><p class="muted">课程内固定团队，每队3—5人。学生先在课程中组队，再选择项目。</p></el-form-item>
+
     </div>
     <el-form-item label="评分标准及权重">
       <div class="criterion-list">

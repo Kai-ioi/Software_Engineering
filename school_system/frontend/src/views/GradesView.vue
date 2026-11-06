@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import WorkspaceTrail from '../components/WorkspaceTrail.vue'
+import { followWorkspace, scopeTeams } from '../stores/workspace'
 import { computed, onMounted, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElInputNumber } from 'element-plus'
@@ -35,8 +37,19 @@ const fullScore = computed(() => (sheet.value?.criteria || []).reduce((s, c) => 
 const submitted = computed(() => sheet.value?.sheet?.status === 'SUBMITTED')
 const stamp = (v?: string | null) => v ? new Date(v).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '—'
 const sheetStatusName = (s?: string | null) => s === 'SUBMITTED' ? '已提交' : s === 'DRAFT' ? '草稿' : '未评分'
+const showSamples = ref(false)
+const gradingTeams = computed(() => scopeTeams(overview.value?.teams || [], route.query, courseId.value).filter(team => showSamples.value || !team.demo_fixture))
+followWorkspace(courseId, teamId, () => overview.value?.teams || [])
+const summaryTeams = computed(() => scopeTeams(summary.value?.teams || [], route.query, courseId.value).filter(team => showSamples.value || !team.demo_fixture))
+async function changeSampleVisibility() {
+  if (gradingTeams.value.some(team => team.id === teamId.value)) return
+  teamId.value = gradingTeams.value[0]?.id
+  sheet.value = undefined
+  if (teamId.value) await loadTeam()
+}
+const visibleMyGrades = computed(() => (myGrades.value?.results || []).filter(row => row.course_id === courseId.value && (!Number(route.query.projectId) || Number(route.query.courseId) !== courseId.value || row.project_id === Number(route.query.projectId))))
 const canPublishAll = computed(() => {
-  const teams = summary.value?.teams || []
+  const teams = summaryTeams.value.filter(team => !team.published)
   return teams.length > 0 && teams.every(t => t.exceptions.length === 0)
 })
 
@@ -45,7 +58,7 @@ async function loadOverview() {
   loading.value = true; failed.value = false; sheet.value = undefined; teamId.value = undefined
   try {
     overview.value = await getOverview(courseId.value)
-    if (overview.value.teams.length) { teamId.value = overview.value.teams[0]!.id; await loadTeam() }
+    if (gradingTeams.value.length) { teamId.value = (gradingTeams.value.find(t => t.id === Number(route.query.teamId)) || gradingTeams.value.find(t => t.project_id === Number(route.query.projectId)) || gradingTeams.value[0])!.id; await loadTeam() }
   } catch { failed.value = true } finally { loading.value = false }
 }
 async function loadTeam() {
@@ -106,7 +119,7 @@ async function doConfirmRoster(t: SummaryTeam) {
 async function doPublish() {
   if (!courseId.value || !publishReason.value.trim()) { ElMessage.warning('请填写发布说明'); return }
   busy.value = true
-  try { const r = await publish(courseId.value, publishReason.value.trim(), publishTarget.value?.team_id); ElMessage.success(`已发布 ${r.publishedTeams} 个团队的成绩`); publishOpen.value = false; publishReason.value = ''; await loadSummary() } catch { /* handled */ } finally { busy.value = false }
+  try { const r = await publish(courseId.value, publishReason.value.trim(), publishTarget.value?.team_id, showSamples.value, Number(route.query.courseId) === courseId.value ? Number(route.query.projectId) || undefined : undefined); ElMessage.success(`已发布 ${r.publishedTeams} 个团队的成绩`); publishOpen.value = false; publishReason.value = ''; await loadSummary() } catch { /* handled */ } finally { busy.value = false }
 }
 function openCorrect(t: SummaryTeam) { correctTarget.value = t; correctReason.value = ''; correctOpen.value = true }
 async function doCorrect() {
@@ -126,6 +139,7 @@ onMounted(async () => {
 </script>
 
 <template>
+  <WorkspaceTrail :active-course-id="courseId"/>
   <section class="page-heading">
     <div><span class="eyebrow">GRADING & RESULTS</span><h1>评分与成绩</h1><p class="muted">教师针对被评版本评分，核对名单后汇总发布；学生查询本人成绩。</p></div>
     <el-button :loading="loading" :disabled="busy || loading" @click="teacher ? (tab === 'grading' ? loadOverview() : loadSummary()) : loadMyGrades()">刷新</el-button>
@@ -137,33 +151,34 @@ onMounted(async () => {
 
   <!-- 教师 -->
   <template v-if="teacher">
+    <el-checkbox v-model="showSamples" :disabled="busy || loading || publishOpen" @change="changeSampleVisibility">显示历史样例</el-checkbox>
     <el-tabs v-model="tab" @tab-change="(n: string | number) => switchTab(n as 'grading' | 'summary')">
       <el-tab-pane label="教师评分" name="grading">
         <div class="grade-selectors">
-          <label>团队 <el-select v-model="teamId" aria-label="选择团队" :disabled="busy || loading || !overview?.teams.length" @change="changeTeam"><el-option v-for="t in overview?.teams" :key="t.id" :value="t.id" :label="`${t.name} · ${sheetStatusName(t.sheet_status)}`"/></el-select></label>
+          <label>团队 <el-select v-model="teamId" aria-label="选择团队" :disabled="busy || loading || !gradingTeams.length" @change="changeTeam"><el-option v-for="t in gradingTeams" :key="t.id" :value="t.id" :label="`${t.project_name} / ${t.name} · ${sheetStatusName(t.sheet_status)}`"/></el-select></label>
         </div>
         <div v-if="loading && !overview" class="state-panel">正在加载评分工作空间…</div>
         <el-alert v-else-if="failed" type="error" title="加载失败，请检查服务连接并重试" :closable="false"/>
-        <el-empty v-else-if="!overview?.teams.length" description="暂无已确认被评版本的团队">
+        <el-empty v-else-if="!gradingTeams.length" description="暂无已确认被评版本的团队">
           <p class="muted">请先到「成果与版本」中确认各团队的被评成果版本。</p>
-          <el-button @click="router.push({ path: '/modules/submissions', query: { courseId } })">前往成果与版本</el-button>
+          <el-button @click="router.push({ path: '/modules/submissions', query: { courseId, teamId, projectId: sheet?.project.id } })">前往成果与版本</el-button>
         </el-empty>
         <template v-else-if="sheet">
-          <div class="grade-header"><div><h2>{{ sheet.team.name }}</h2><p class="muted">{{ sheet.project.name }} · 评分标准：{{ sheet.rubric.name }}（v{{ sheet.rubric.version_no }}）</p></div></div>
+          <div class="grade-header"><div><h2>{{ sheet.team.name }}</h2><p class="muted">{{ sheet.project.name }} · 评分标准：{{ sheet.rubric.name }}（第{{ sheet.rubric.version_no }}版）</p></div></div>
           <div class="grade-grid">
             <article class="grade-panel">
               <h3>被评成果版本</h3>
-              <p class="muted">v{{ sheet.version.version_no }} · #{{ sheet.version.id }} · 提交人 {{ sheet.version.submitter_name }}</p>
+              <p class="muted">第{{ sheet.version.version_no }}版 · 提交人 {{ sheet.version.submitter_name }}</p>
               <p class="muted">确认时间 {{ stamp(sheet.binding.confirmed_at) }}</p>
               <p><strong>{{ sheet.version.summary }}</strong></p>
               <div v-if="sheet.materials.length" class="material-list">
                 <div v-for="m in sheet.materials" :key="m.id" class="material-row">
                   <span>{{ m.title }}</span>
                   <a v-if="m.url" :href="m.url" target="_blank" rel="noopener noreferrer" class="download">打开链接</a>
-                  <span v-else class="muted">文件材质</span>
+                  <a v-else :href="`/api/submissions/teams/${sheet.team.id}/versions/${sheet.version.id}/files/${m.id}`" class="download">下载被评文件</a>
                 </div>
               </div>
-              <el-empty v-else description="该版本无材质" :image-size="60"/>
+              <el-empty v-else description="该成果版本暂无可展示材料" :image-size="60"/>
             </article>
             <article class="grade-panel">
               <h3>评分维度</h3>
@@ -190,21 +205,21 @@ onMounted(async () => {
         <el-alert v-else-if="failed" type="error" title="加载失败，请检查服务连接并重试" :closable="false"/>
         <template v-else-if="summary">
           <div class="summary-bar">
-            <div><p class="muted">各团队采用所属项目发布的评分维度和成绩权重</p></div>
+            <div><p class="muted">各团队采用所属项目发布的评分维度和成绩权重。发布按当前项目范围处理；课程导出包含本课程全部已发布成绩。</p></div>
             <div class="grade-actions">
-              <el-button :disabled="busy || loading || !canPublishAll" type="primary" @click="openPublish()">发布全部成绩</el-button>
-              <a :href="exportUrl(courseId!, 'csv')" class="download">导出 CSV</a>
-              <a :href="exportUrl(courseId!, 'xlsx')" class="download">导出 XLSX</a>
+              <el-button :disabled="busy || loading || !canPublishAll" type="primary" @click="openPublish()">发布当前范围成绩</el-button>
+              <a :href="exportUrl(courseId!, 'csv')" class="download">导出课程 CSV</a>
+              <a :href="exportUrl(courseId!, 'xlsx')" class="download">导出课程 XLSX</a>
             </div>
           </div>
-          <el-table :data="summary.teams" stripe>
+          <el-table :data="summaryTeams" stripe>
             <el-table-column label="团队" min-width="140"><template #default="{ row }"><strong>{{ row.team_name }}</strong><p class="muted">{{ row.project_name }}</p></template></el-table-column>
             <el-table-column label="教师得分" width="100" align="center"><template #default="{ row }">{{ row.teacher_total ?? '—' }}</template></el-table-column>
             <el-table-column label="互评均分" width="100" align="center"><template #default="{ row }">{{ row.peer_avg ?? '—' }}</template></el-table-column>
             <el-table-column label="最终总分" width="100" align="center"><template #default="{ row }"><strong>{{ row.final_total ?? '—' }}</strong></template></el-table-column>
             <el-table-column label="状态 / 异常" min-width="200"><template #default="{ row }">
               <template v-if="row.exceptions.length"><el-tag v-for="e in row.exceptions" :key="e" type="warning" size="small" class="tag-gap">{{ e }}</el-tag></template>
-              <template v-else-if="row.published"><el-tag type="success" size="small">{{ row.published.status === 'CORRECTED' ? '已更正 v' + row.published.version_no : '已发布' }}</el-tag></template>
+              <template v-else-if="row.published"><el-tag type="success" size="small">{{ row.published.status === 'CORRECTED' ? '已更正 · 第' + row.published.version_no + '版' : '已发布' }}</el-tag></template>
               <template v-else><el-tag type="info" size="small">待发布</el-tag></template>
             </template></el-table-column>
             <el-table-column label="操作" width="220"><template #default="{ row }">
@@ -223,15 +238,15 @@ onMounted(async () => {
   <template v-else>
     <div v-if="loading && !myGrades" class="state-panel">正在加载成绩…</div>
     <el-alert v-else-if="failed" type="error" title="加载失败，请检查服务连接并重试" :closable="false"/>
-    <el-empty v-else-if="!myGrades?.results.length" description="暂无已发布的成绩，请等待教师发布。"/>
-    <el-table v-else :data="myGrades.results" stripe>
+    <el-empty v-else-if="!visibleMyGrades.length" description="暂无已发布的成绩，请等待教师发布。"/>
+    <el-table v-else :data="visibleMyGrades" stripe>
       <el-table-column label="课程" min-width="140" prop="course_name"/>
       <el-table-column label="项目 / 团队" min-width="180"><template #default="{ row }">{{ row.project_name }} / {{ row.team_name }}</template></el-table-column>
       <el-table-column label="教师得分" width="100" align="center" prop="teacher_total"/>
       <el-table-column label="互评均分" width="100" align="center" prop="peer_total"/>
       <el-table-column label="最终总分" width="100" align="center"><template #default="{ row }"><strong>{{ row.final_total }}</strong></template></el-table-column>
       <el-table-column label="状态" width="110" align="center"><template #default="{ row }"><el-tag :type="row.status === 'CORRECTED' ? 'warning' : 'success'" size="small">{{ row.status === 'CORRECTED' ? '已更正' : '已发布' }}</el-tag></template></el-table-column>
-      <el-table-column label="被评成果" width="110"><template #default="{row}">{{ row.evaluated_version_no == null ? '—' : 'v' + row.evaluated_version_no }}</template></el-table-column>
+      <el-table-column label="被评成果" width="110"><template #default="{row}">{{ row.evaluated_version_no == null ? '—' : '第' + row.evaluated_version_no + '版' }}</template></el-table-column>
       <el-table-column label="发布时间" min-width="160"><template #default="{ row }">{{ stamp(row.published_at) }}</template></el-table-column>
     </el-table>
   </template>
@@ -242,7 +257,7 @@ onMounted(async () => {
     <template #footer><el-button :disabled="busy" @click="modifyOpen = false">取消</el-button><el-button type="primary" :loading="busy" @click="doModify">确认修改</el-button></template>
   </el-dialog>
 
-  <el-dialog v-model="publishOpen" :title="publishTarget ? `发布 ${publishTarget.team_name} 的成绩` : '发布全部成绩'" width="min(520px, 92vw)" :close-on-click-modal="false">
+  <el-dialog v-model="publishOpen" :title="publishTarget ? `发布 ${publishTarget.team_name} 的成绩` : '发布当前范围成绩'" width="min(520px, 92vw)" :close-on-click-modal="false">
     <p class="muted">发布前校验所选团队的被评版本、正权重评分来源及计分名单。</p>
     <el-input v-model="publishReason" type="textarea" :rows="3" maxlength="2000" placeholder="发布说明"/>
     <template #footer><el-button :disabled="busy" @click="publishOpen = false">取消</el-button><el-button type="primary" :loading="busy" @click="doPublish">确认发布</el-button></template>
@@ -250,7 +265,7 @@ onMounted(async () => {
 
   <el-dialog v-model="evidenceOpen" title="已发布成绩的计分依据" width="min(720px, 92vw)">
     <template v-if="evidence">
-      <p>成绩 v{{ evidence.version_no }} · 被评成果 v{{ evidence.evaluated_version_no ?? '—' }}（编号 {{ evidence.evaluated_version_id ?? '—' }}）</p>
+      <p>成绩第{{ evidence.version_no }}版 · 被评成果{{ evidence.evaluated_version_no == null ? '版本未记录' : '第' + evidence.evaluated_version_no + '版' }}</p>
       <el-button v-if="evidence.parent_id" link @click="showEvidence(evidence.parent_id)">查看上一版成绩依据</el-button>
       <h4>教师评分记录</h4><pre style="white-space: pre-wrap">{{ decoded(evidence.score_snapshot) }}</pre>
       <h4>有效互评记录</h4><pre style="white-space: pre-wrap">{{ decoded(evidence.peer_snapshot) }}</pre>

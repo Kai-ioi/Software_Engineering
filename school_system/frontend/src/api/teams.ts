@@ -27,6 +27,7 @@ export interface Team {
   applications: TeamMember[]
   myRole: CourseRole
   canManage: boolean
+  fixedCourseTeams: boolean
   groupingOpen: boolean
 }
 
@@ -68,3 +69,7 @@ export const decideExit = (course: number, project: number, team: number, member
   request<Team>(`/courses/${course}/projects/${project}/teams/${team}/members/${member}/exit-decision?approved=${approved}`, jsonInit('POST'))
 export const assignStudent = (course: number, project: number, team: number, student: number) =>
   request<Team>(`/courses/${course}/projects/${project}/teams/${team}/assign?studentId=${student}`, jsonInit('POST'))
+
+export interface AssignmentCandidate { id: number; display_name: string; username: string }
+export const getAssignmentCandidates = (course: number, project: number, team: number) =>
+  request<AssignmentCandidate[]>(`/courses/${course}/projects/${project}/teams/${team}/assignment-candidates`)

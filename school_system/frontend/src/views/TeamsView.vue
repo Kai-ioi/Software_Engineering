@@ -58,14 +58,15 @@ async function create() {
 </script>
 
 <template>
+  <el-button type="primary" @click="router.push(`/courses/${courseId}/teams`)">课程组队与选题</el-button>
   <el-button text @click="router.push(`/courses/${courseId}/projects/${projectId}`)"><ArrowLeft class="button-icon"/>返回项目详情</el-button>
   <section class="page-heading detail-heading">
-    <div><span class="eyebrow">PROJECT TEAMS</span><h1>团队与成员</h1><p class="muted">{{ project ? project.title + ' · ' + project.minTeamSize + '-' + project.maxTeamSize + ' 人/队' : '课程团队' }}</p></div>
-    <el-button v-if="project?.myRole === 'STUDENT' && windowState?.open" type="primary" @click="showCreate = true"><Plus class="button-icon"/>创建团队</el-button>
+    <div><span class="eyebrow">PROJECT TEAMS</span><h1>团队与成员</h1><p class="muted">{{ project ? project.title + ' · 查看本项目的选题团队' : '课程团队' }}</p></div>
+    <el-button v-if="project?.myRole === 'STUDENT' && windowState?.open" type="primary" @click="router.push(`/courses/${courseId}/teams`)"><Plus class="button-icon"/>课程组队与选题</el-button>
   </section>
 
-  <p v-if="windowState" class="muted">组队窗口（北京时间） {{ windowState.opensAt?.slice(0, 16).replace('T', ' ') || '项目发布时' }} 至 {{ windowState.closesAt?.slice(0, 16).replace('T', ' ') || '尚未设置' }}</p>
-  <el-button v-if="project?.myRole === 'TEACHER'" @click="openWindow">设置组队窗口</el-button>
+  <p class="muted">先在课程里确认3—5名组员，再由组长选择项目。此处查看项目工作团队及历史记录。</p>
+
   <el-dialog v-model="showWindow" title="组队窗口（北京时间）" width="440px">
     <el-form label-position="top" @submit.prevent="updateWindow">
       <el-form-item label="开放时间"><input v-model="opens" type="datetime-local"></el-form-item>
@@ -86,7 +87,7 @@ async function create() {
       </div>
     </article>
   </div>
-  <el-empty v-else description="还没有团队，点击右上角「创建团队」组建第一支队伍"/>
+  <el-empty v-else description="当前项目尚无选题团队，请先在课程中组队并由组长选择项目"/>
 
   <el-dialog v-model="showCreate" title="创建团队" width="min(420px, 92vw)" destroy-on-close>
     <el-form label-position="top" @submit.prevent="create">

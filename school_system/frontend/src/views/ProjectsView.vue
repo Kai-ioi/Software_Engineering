@@ -37,10 +37,11 @@ function fmt(t: string | null) { return t ? new Date(t).toLocaleString('zh-CN', 
 <template>
   <el-button text @click="router.push(`/courses/${courseId}`)"><ArrowLeft class="button-icon"/>返回课程空间</el-button>
   <section class="page-heading detail-heading">
-    <div><span class="eyebrow">COURSE PROJECTS</span><h1>课程项目</h1><p class="muted">{{ course ? course.name + ' · ' + roleName[course.myRole] : '课程项目' }}</p></div>
+    <div><span class="eyebrow">COURSE PROJECTS</span><h1>课程项目池</h1><p class="muted">{{ course ? course.name + ' · ' + roleName[course.myRole] : '课程项目' }}</p></div>
     <el-button v-if="course?.myRole === 'TEACHER'" type="primary" @click="showForm = true"><Plus class="button-icon"/>新建项目</el-button>
   </section>
 
+  <section class="workspace-trail"><span>本课程项目供团队选择。先确认3—5名组员，再由组长统一选题，同一团队用于所选全部项目。</span><el-button type="primary" @click="router.push(`/courses/${courseId}/teams`)">组队与选题</el-button></section>
   <div v-if="loading" class="state-panel">正在加载项目…</div>
   <div v-else-if="failed" class="state-panel"><p>项目加载失败，请检查服务后重试。</p><el-button @click="load">重新加载</el-button></div>
   <div v-else-if="projects.length" class="project-grid">
@@ -50,7 +51,7 @@ function fmt(t: string | null) { return t ? new Date(t).toLocaleString('zh-CN', 
       <p class="project-desc">{{ p.description }}</p>
       <div class="project-meta">
         <span><Calendar/>截止 {{ fmt(p.deadline) }}</span>
-        <span><User/>{{ p.minTeamSize }}-{{ p.maxTeamSize }} 人/队</span>
+        <span><User/>课程固定团队 · 3—5人</span>
         <span><List/>{{ p.criteria.length }} 项评分</span>
       </div>
     </article>

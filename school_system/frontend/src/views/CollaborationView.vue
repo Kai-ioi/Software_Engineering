@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import WorkspaceTrail from '../components/WorkspaceTrail.vue'
+import { followWorkspace, scopeTeams } from '../stores/workspace'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElDatePicker, ElInputNumber, ElProgress, ElResult, ElTable, ElTableColumn, ElCheckbox, ElDrawer } from 'element-plus'
@@ -9,11 +11,18 @@ import { getTeams, getWorkspace, getHistory, mutate, statusNames, projectStatusN
 
 const route = useRoute(), router = useRouter()
 const courses = ref<Course[]>([]), courseId = ref<number>(), teamId = ref<number>(), teams = ref<TeamOption[]>([])
+followWorkspace(courseId, teamId, () => teams.value)
 const workspace = ref<Workspace>(), selectedIteration = ref<number>(), loading = ref(false), saving = ref(false), failed = ref(false)
 const events = ref<Event[]>([]), historyOpen = ref(false), moreHistory = ref(false), historyLoading = ref(false)
 const filter = ref('all'), search = ref('')
 const iteration = computed(() => workspace.value?.iterations.find(i => i.id === selectedIteration.value))
 const writable = computed(() => !!workspace.value && ['PUBLISHED', 'IN_PROGRESS'].includes(workspace.value.project.status) && new Date(workspace.value.project.final_deadline).getTime() >= Date.now())
+const readonlyReason = computed(() => {
+  if (!workspace.value) return ''
+  if (['ENDED','TERMINATED','ARCHIVED'].includes(workspace.value.project.status)) return `项目${projectStatusNames[workspace.value.project.status]}，协作信息只读，可继续查阅成果及过程记录。`
+  if (Date.parse(workspace.value.project.final_deadline) < Date.now()) return '项目最终截止已到，迭代与任务只读。成果补交请进入“成果与版本”申请教师授权。'
+  return '当前项目尚未开放协作，请联系任课教师确认项目状态。'
+})
 const lead = computed(() => writable.value && !!workspace.value?.isLeader)
 const manager = computed(() => writable.value && (workspace.value?.isLeader || workspace.value?.role === 'TEACHER'))
 const iterationOpen = computed(() => !!iteration.value && iteration.value.status !== 'ENDED')
@@ -32,7 +41,7 @@ async function loadTeams() {
   teamId.value = undefined; workspace.value = undefined; selectedIteration.value = undefined; failed.value = false; teams.value = []
   if (!courseId.value) return
   loading.value = true
-  try { teams.value = await getTeams(courseId.value); if (teams.value.length) { teamId.value = teams.value[0]!.id; await refresh() } }
+  try { teams.value = scopeTeams(await getTeams(courseId.value), route.query, courseId.value); if (teams.value.length) { teamId.value = (teams.value.find(t => t.id === Number(route.query.teamId)) || teams.value.find(t => t.project_id === Number(route.query.projectId)) || teams.value[0])!.id; await refresh() } }
   catch { failed.value = true } finally { loading.value = false }
 }
 async function refresh() {
@@ -108,15 +117,15 @@ function detail(value: string) { try { return JSON.stringify(JSON.parse(value), 
 </script>
 
 <template>
-  <section class="page-heading"><div><span class="eyebrow">TEAM WORKSPACE</span><h1>迭代与任务</h1><p class="muted">按团队节奏安排工作，保留每次进展与调整。</p></div><el-button :loading="loading" @click="refresh">刷新</el-button></section>
+  <WorkspaceTrail :active-course-id="courseId"/>
+  <section class="page-heading"><div><span class="eyebrow">TEAM WORKSPACE</span><h1>迭代与任务</h1><p class="muted">组长规划本团队的迭代与分工，组员更新自己的任务；教师查看进展并按需指导。</p></div><el-button :loading="loading" @click="refresh">刷新</el-button></section>
   <div class="collab-selectors"><label>课程 <el-select v-model="courseId" aria-label="选择课程" @change="loadTeams"><el-option v-for="c in courses" :key="c.id" :label="c.name" :value="c.id"/></el-select></label><label>团队 <el-select v-model="teamId" aria-label="选择团队" :disabled="!teams.length" @change="changeTeam"><el-option v-for="t in teams" :key="t.id" :label="`${t.project_name} / ${t.name}`" :value="t.id"/></el-select></label></div>
   <div v-if="loading && !workspace" class="state-panel">正在加载团队工作空间…</div>
   <el-result v-else-if="failed" icon="warning" title="暂时无法加载" sub-title="请检查服务连接或重新选择课程"><template #extra><el-button @click="loadTeams">重试</el-button></template></el-result>
   <el-empty v-else-if="!workspace" description="当前课程暂无你可访问的项目团队"><el-button @click="router.push('/courses')">返回课程</el-button></el-empty>
   <template v-else>
-    <el-alert v-if="workspace.project.demo_fixture" type="info" :closable="false" title="当前为模块3演示项目与团队，可用于验证协作功能。"/>
     <div class="collab-project"><div><h2>{{ workspace.team.name }}</h2><p class="muted">{{ workspace.project.name }} · {{ projectStatusNames[workspace.project.status] }} · 最终截止 {{ time(workspace.project.final_deadline) }}</p></div><el-button :loading="historyLoading" @click="history()">查看过程记录</el-button></div>
-    <el-alert v-if="!writable" type="warning" :closable="false" title="当前项目已结束、终止、归档或已到最终期限，协作信息只读。"/>
+    <el-alert v-if="!writable" type="warning" :closable="false" :title="readonlyReason"/>
     <p v-else class="muted collab-policy">{{ workspace.role === 'TA' ? '助教可查看课程内团队进度，不能修改协作计划。' : workspace.role === 'TEACHER' ? '教师可干预团队任务，操作须填写原因；迭代和里程碑由团队负责人维护。' : workspace.isLeader ? '你是团队负责人，可维护迭代、任务和里程碑。' : '你可查看团队进度，并更新分配给自己的任务。' }} 计划日期不自动产生延期标记或结束迭代。</p>
     <div class="collab-grid"><aside class="collab-iterations"><div class="collab-bar"><h3>团队迭代</h3><el-button v-if="lead" type="primary" size="small" @click="open('iteration')">新建迭代</el-button></div><el-empty v-if="!workspace.iterations.length" description="尚未安排迭代" :image-size="60"/><button v-for="i in workspace.iterations" :key="i.id" class="iteration-choice" :class="{selected: i.id === selectedIteration}" @click="selectedIteration = i.id"><strong>{{ i.sequence_no }}. {{ i.name }}</strong><span>{{ statusNames[i.status] }}</span><small>{{ i.planned_start }} — {{ i.planned_end }}</small></button></aside>
     <section class="collab-main"><el-empty v-if="!iteration" description="选择或创建一轮迭代"/><template v-else>

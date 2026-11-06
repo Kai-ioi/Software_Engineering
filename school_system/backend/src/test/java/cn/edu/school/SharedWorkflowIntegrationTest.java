@@ -25,6 +25,7 @@ class SharedWorkflowIntegrationTest {
  @Autowired ProjectService projects;@Autowired TeamService teams;@Autowired CollaborationService tasks;
  @Autowired SubmissionService submissions;@Autowired ReviewService reviews;@Autowired GradingService grades;
  @Autowired cn.edu.school.workflow.WorkflowNotices notices;
+ @Autowired cn.edu.school.config.DemoRosterSeeder rosterSeeder;
  @Autowired cn.edu.school.workflow.WorkflowHistory history;
  @Autowired cn.edu.school.workflow.CourseRetention retention;
  @Autowired jakarta.persistence.EntityManager em;
@@ -77,7 +78,7 @@ class SharedWorkflowIntegrationTest {
   }
   grades.publish(teacher,c,new GradingService.PublishInput("先发布已确认的一组",t1));
   assertThat(db.queryForObject("SELECT COUNT(*) FROM grade_result WHERE team_id=?",Long.class,t2)).isZero();
-  grades.publish(teacher,c,new GradingService.PublishInput("核对成绩和名单后发布"));
+  grades.publish(teacher,c,new GradingService.PublishInput("核对成绩和名单后发布",null,false,project));
   var old=db.queryForMap("SELECT * FROM grade_result WHERE team_id=?",t1);assertThat(((Number)old.get("final_total")).doubleValue()).isEqualTo(87);
   var scores=db.queryForMap("SELECT * FROM grading_criterion_score WHERE sheet_id=?",old.get("sheet_id"));
   grades.modify(teacher,n(old,"sheet_id"),new GradingService.SaveInput(n(old,"rubric_id"),List.of(new GradingService.ScoreInput(n(scores,"criterion_id"),70)),"核实后调整教师评分"));
@@ -104,6 +105,47 @@ class SharedWorkflowIntegrationTest {
   assertThatThrownBy(()->projects.update(teacher,c,project,new ProjectService.ProjectInput("改标准","要求",deadline,1,4,List.of(new ProjectService.ProjectInput.CriterionInput("新维度",100,""))))).isInstanceOf(cn.edu.school.common.BusinessException.class);
   }
  }
+ @Test void projectScopedPublishDoesNotTouchOtherProjectsAndRejectsForeignProject(){
+  long c=course(),teacher=u("teacher01"),student=u("student01");
+  var deadline=OffsetDateTime.ofInstant(instant.plus(Duration.ofDays(2)),ZoneOffset.UTC);
+  long target=projects.create(teacher,c,input(deadline)).id();projects.publish(teacher,c,target);
+  long other=projects.create(teacher,c,input(deadline)).id();projects.publish(teacher,c,other);
+  long otherTeam=teams.create(student,c,other,new TeamService.CreateInput("尚未评分的其他项目团队")).id();
+  assertThatThrownBy(()->grades.publish(teacher,c,new GradingService.PublishInput("只发布当前项目",null,false,target))).isInstanceOf(cn.edu.school.common.BusinessException.class).satisfies(e->assertThat(((cn.edu.school.common.BusinessException)e).code()).isEqualTo("NO_TEAMS_TO_PUBLISH"));
+  assertThat(db.queryForObject("SELECT COUNT(*) FROM grade_result WHERE team_id=?",Long.class,otherTeam)).isZero();
+  long foreignCourse=course();long foreign=projects.create(teacher,foreignCourse,input(deadline)).id();
+  assertThatThrownBy(()->grades.publish(teacher,c,new GradingService.PublishInput("错误项目",null,false,foreign))).isInstanceOf(cn.edu.school.common.BusinessException.class);
+ }
+
+ @Test void historicalLeaderWithoutActiveMembershipCannotManageTeam(){
+  long c=course(),teacher=u("teacher01"),leader=u("student01"),member=u("student03");
+  var deadline=OffsetDateTime.ofInstant(instant.plus(Duration.ofDays(2)),ZoneOffset.UTC);
+  long p=projects.create(teacher,c,input(deadline)).id();projects.publish(teacher,c,p);
+  long team=teams.create(leader,c,p,new TeamService.CreateInput("保留历史的团队")).id();
+  teams.apply(member,c,p,team);
+  long application=db.queryForObject("SELECT id FROM project_team_member WHERE team_id=? AND user_id=?",Long.class,team,member);
+  em.flush();
+  db.update("UPDATE project_team_member SET status='LEFT',active=FALSE WHERE team_id=? AND user_id=?",team,leader);
+  em.clear();
+  assertThat(teams.detail(leader,c,p,team).canManage()).isFalse();
+  assertThatThrownBy(()->teams.approve(leader,c,p,team,application)).isInstanceOf(cn.edu.school.common.BusinessException.class);
+  assertThat(teams.detail(teacher,c,p,team).canManage()).isTrue();
+ }
+
+ @Test void fixtureRosterDoesNotAddStudentToSecondActiveTeam(){
+  long c=course(),teacher=u("teacher01"),a=u("student01"),b=u("student04"),chen=u("student05");
+  var deadline=OffsetDateTime.ofInstant(instant.plus(Duration.ofDays(2)),ZoneOffset.UTC);
+  long p=projects.create(teacher,c,input(deadline)).id();projects.publish(teacher,c,p);
+  long first=teams.create(a,c,p,new TeamService.CreateInput("样例负责人团队")).id();
+  long second=teams.create(b,c,p,new TeamService.CreateInput("学生已加入团队")).id();
+  em.flush();db.update("UPDATE course_project SET demo_fixture=TRUE WHERE id=?",p);
+  db.update("INSERT INTO course_membership(course_id,user_id,role,active) VALUES(?,?,'STUDENT',TRUE)",c,chen);
+  db.update("INSERT INTO project_team_member(team_id,user_id,status,active) VALUES(?,?,'ACTIVE',TRUE)",second,chen);
+  rosterSeeder.seed();
+  assertThat(db.queryForObject("SELECT COUNT(*) FROM project_team_member WHERE team_id=? AND user_id=? AND status='ACTIVE'",Long.class,first,chen)).isZero();
+  assertThat(db.queryForObject("SELECT COUNT(*) FROM project_team_member WHERE team_id=? AND user_id=? AND status='ACTIVE'",Long.class,second,chen)).isEqualTo(1L);
+ }
+
  @Test void projectNoticesAndHistoryStayWithinCourseAndTeam(){
   long c=course(),teacher=u("teacher01"),a=u("student01"),b=u("student04"),outsider=u("student02");
   var deadline=OffsetDateTime.now().plusHours(12);

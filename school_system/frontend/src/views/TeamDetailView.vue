@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, User, List } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { auth } from '../stores/auth'
-import { getTeams, getTeam, applyTeam, approveMember, rejectMember, leaveTeam, removeMember, transferLeadership, transferMember, decideExit, assignStudent, type Team } from '../api/teams'
+import { getTeams, getTeam, applyTeam, approveMember, rejectMember, leaveTeam, removeMember, transferLeadership, transferMember, decideExit, assignStudent, getAssignmentCandidates, type AssignmentCandidate, type Team } from '../api/teams'
 
 const route = useRoute(); const router = useRouter()
 const courseId = Number(route.params.courseId)
@@ -60,11 +60,27 @@ function quit() {
 function exitDecision(memberId: number, approved: boolean) {
   void run(() => decideExit(courseId, projectId, teamId, memberId, approved))
 }
+const assignmentOpen = ref(false)
+const assignmentLoading = ref(false)
+const candidates = ref<AssignmentCandidate[]>([])
+const studentId = ref<number>()
 async function assign() {
+  assignmentOpen.value = true
+  assignmentLoading.value = true
+  candidates.value = []
+  studentId.value = undefined
+  try { candidates.value = await getAssignmentCandidates(courseId, projectId, teamId) }
+  catch { assignmentOpen.value = false }
+  finally { assignmentLoading.value = false }
+}
+async function confirmAssignment() {
+  if (studentId.value == null || acting.value) return
+  acting.value = true
   try {
-    const { value } = await ElMessageBox.prompt('请输入本课程学生的用户编号', '教师分配学生', { inputPattern: /^[1-9][0-9]*$/, inputErrorMessage: '请输入有效编号' })
-    await run(() => assignStudent(courseId, projectId, teamId, Number(value)))
-  } catch {}
+    team.value = await assignStudent(courseId, projectId, teamId, studentId.value)
+    assignmentOpen.value = false
+    ElMessage.success('学生已加入团队')
+  } catch {} finally { acting.value = false }
 }
 function approve(memberId: number) { run(() => approveMember(courseId, projectId, teamId, memberId)) }
 function reject(memberId: number) { run(() => rejectMember(courseId, projectId, teamId, memberId)) }
@@ -94,10 +110,12 @@ const statusText = (): string => team.value ? (team.value.full ? '已满员' : t
 
   <template v-else>
     <section class="page-heading detail-heading">
-      <div><span class="eyebrow">TEAM DETAIL</span><h1>{{ team.name }}</h1><p class="muted">负责人 {{ team.leaderName }} · {{ team.activeCount }}/{{ team.maxTeamSize }} 人 · 组队窗口 {{ team.minTeamSize }}-{{ team.maxTeamSize }} 人</p></div>
+      <div><span class="eyebrow">TEAM DETAIL</span><h1>{{ team.name }}</h1><p class="muted">{{ team.activeCount ? '负责人' : '历史负责人（当前无有效成员）' }} {{ team.leaderName }} · {{ team.activeCount }}/{{ team.maxTeamSize }} 人 · 组队窗口 {{ team.minTeamSize }}-{{ team.maxTeamSize }} 人</p></div>
       <span class="project-status" :class="team.full ? 'closed' : team.complete ? 'published' : 'draft'">{{ statusText() }}</span>
     </section>
 
+    <el-alert v-if="team.fixedCourseTeams" type="info" :closable="false" title="本课程采用固定团队。组队、邀请及选题请进入“组队与选题”；各项目不再单独调整成员。"/>
+    <section class="team-next-actions"><div><h2>团队工作入口</h2><p class="muted">继续处理本团队的协作与成果，进入后保留当前项目和团队。</p></div><div><el-button type="primary" @click="router.push({path:'/modules/tasks',query:{courseId,projectId,teamId}})">迭代与任务</el-button><el-button @click="router.push({path:'/modules/submissions',query:{courseId,projectId,teamId}})">成果与版本</el-button><el-button @click="router.push({path:'/modules/reviews',query:{courseId,projectId,teamId,tab:'inspection'}})">检查与整改</el-button></div></section>
     <div class="detail-panel">
       <div class="detail-section">
         <h3><User/>团队成员（{{ team.members.length }}）</h3>
@@ -136,7 +154,7 @@ const statusText = (): string => team.value ? (team.value.full ? '已满员' : t
       <div class="detail-actions">
         <el-button v-if="team.myRole === 'STUDENT' && team.groupingOpen && !isMember() && !isPending() && !team.full" type="primary" :loading="acting" @click="apply">申请加入</el-button>
         <el-tag v-else-if="isPending()" type="info">申请已提交，等待负责人审批</el-tag>
-        <el-button v-if="team.myRole === 'TEACHER' && !team.full" @click="assign">分配学生</el-button>
+        <el-button v-if="team.myRole === 'TEACHER' && !team.fixedCourseTeams && !team.full" @click="assign">分配学生</el-button>
         <el-tag v-if="team.members.some(m => m.userId === me() && m.exitRequested)">退出申请待处理</el-tag>
         <el-button v-else-if="team.groupingOpen && isMember() && !isLeader()" type="warning" :loading="acting" @click="quit">申请退出</el-button>
       </div>
@@ -151,6 +169,19 @@ const statusText = (): string => team.value ? (team.value.full ? '已满员' : t
       </el-table>
     </el-dialog>
   </template>
+
+  <el-dialog v-model="assignmentOpen" title="分配学生" width="min(480px, 92vw)">
+    <p class="muted">按姓名或登录账号搜索本课程可分配的学生。已加入其他团队的学生请使用转组功能。</p>
+    <el-select v-model="studentId" filterable :loading="assignmentLoading" placeholder="选择学生"
+               no-data-text="当前没有可分配的学生" style="width: 100%">
+      <el-option v-for="student in candidates" :key="student.id" :value="student.id"
+                 :label="`${student.display_name}（${student.username}）`" />
+    </el-select>
+    <template #footer>
+      <el-button @click="assignmentOpen = false">取消</el-button>
+      <el-button type="primary" :loading="acting" :disabled="studentId == null" @click="confirmAssignment">确认分配</el-button>
+    </template>
+  </el-dialog>
 
   <el-dialog v-model="showTransfer" title="成员转组" width="min(420px, 92vw)" destroy-on-close>
     <el-form label-position="top">

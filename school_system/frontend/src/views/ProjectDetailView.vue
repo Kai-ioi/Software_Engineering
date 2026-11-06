@@ -5,6 +5,8 @@ import { ArrowLeft, Calendar, User, List } from '@element-plus/icons-vue'
 import { getCourse, roleName, type Course } from '../api/courses'
 import { getProject, getProjectChanges, type ProjectChange, updateProject, publishProject, closeProject, archiveProject, startProject, endProject, statusName, type Project, type ProjectInput } from '../api/projects'
 import ProjectForm from '../components/ProjectForm.vue'
+import ProjectJourney from '../components/ProjectJourney.vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute(); const router = useRouter()
 const courseId = Number(route.params.courseId)
@@ -48,6 +50,10 @@ async function save(input: ProjectInput) {
 }
 
 async function run(action: 'publish' | 'close' | 'archive' | 'start' | 'end') {
+  if (['close', 'archive', 'end'].includes(action)) {
+    const messages = { close: '终止后将停止正常业务操作并保留历史，请确认是否终止该项目。', archive: '归档将限制后续业务操作并保留项目历史，请确认项目已满足归档条件。', end: '结束项目将影响后续协作与成果提交，请确认当前工作已完成。' }
+    try { await ElMessageBox.confirm(messages[action as keyof typeof messages], '确认项目操作', { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' }) } catch { return }
+  }
   acting.value = true
   try {
     if (action === 'publish') project.value = await publishProject(courseId, projectId)
@@ -55,10 +61,11 @@ async function run(action: 'publish' | 'close' | 'archive' | 'start' | 'end') {
     else if(action === 'start') project.value = await startProject(courseId,projectId)
     else if(action === 'end') project.value = await endProject(courseId,projectId)
     else project.value = await archiveProject(courseId, projectId)
+    ElMessage.success('项目状态已更新')
   } catch {} finally { acting.value = false }
 }
 
-function fmt(t: string | null) { return t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '未设置' }
+function fmt(t: string | null) { return t ? new Date(t).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }) : '未设置' }
 
 function goTeams() { router.push(`/courses/${courseId}/projects/${projectId}/teams`) }
 </script>
@@ -76,6 +83,7 @@ function goTeams() { router.push(`/courses/${courseId}/projects/${projectId}/tea
         <el-button type="primary" @click="goTeams">团队与成员</el-button>
       </div>
     </section>
+    <ProjectJourney :project="project" :course-id="courseId"/>
     <section v-if="changes.length" class="detail-panel">
       <h3>项目变更记录</h3>
       <el-collapse>
@@ -93,12 +101,12 @@ function goTeams() { router.push(`/courses/${courseId}/projects/${projectId}/tea
     <div class="detail-panel">
       <div class="panel-row">
         <span><Calendar/>截止 {{ fmt(project.deadline) }}</span>
-        <span><User/>{{ project.minTeamSize }}-{{ project.maxTeamSize }} 人/队</span>
+        <span><User/>课程固定团队 · 3—5人</span>
         <span><List/>{{ project.criteria.length }} 项评分标准</span>
       </div>
       <div class="detail-section"><h3>项目要求</h3><p class="detail-description">{{ project.description }}</p></div>
       <div class="detail-section" v-if="project.criteria.length">
-        <h3>评分标准及权重</h3>
+        <h3>评分维度（满分 100 分）</h3><p class="muted">教师评分占 {{ project.teacherWeight ?? 70 }}%，同伴互评占 {{ project.peerWeight ?? 30 }}%；成绩发布前须核对来源和计分名单。</p>
         <table class="criterion-table">
           <thead><tr><th>评分项</th><th>权重</th><th>说明</th></tr></thead>
           <tbody>

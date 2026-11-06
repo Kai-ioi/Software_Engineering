@@ -11,7 +11,7 @@ public class WorkflowNotices {
     private final JdbcTemplate db;
     private final org.springframework.transaction.support.TransactionTemplate transaction;
     private static final Set<String> ACTIONS = Set.of("PROJECT_PUBLISHED","PROJECT_REQUIREMENTS_CHANGED",
-        "REVIEW_TASK_ASSIGNED","TEAM_TASK_ASSIGNED","INSPECTION_CREATED","GRADE_PUBLISHED","GRADE_CORRECTED");
+        "REVIEW_TASK_ASSIGNED","TEAM_TASK_ASSIGNED","INSPECTION_CREATED","GRADE_PUBLISHED","GRADE_CORRECTED","COURSE_TEAM_INVITED","COURSE_TEAM_JOINED","COURSE_TEAM_DECLINED");
 
     public WorkflowNotices(JdbcTemplate db,org.springframework.transaction.PlatformTransactionManager manager) {
         this.db=db;
@@ -48,6 +48,15 @@ public class WorkflowNotices {
         String key = "audit:" + event;
         String reviews = "/modules/reviews?courseId=" + course;
         switch (action) {
+            case "COURSE_TEAM_INVITED" -> {
+                long team=Long.parseLong(object.substring(0,object.indexOf(':')));
+                var names=db.queryForList("SELECT name FROM course_team WHERE id=? AND course_id=?",String.class,team,course);
+                if(!names.isEmpty())add(key,course,"邀请你加入课程团队「"+names.getFirst()+"」","/courses/"+course+"/teams",
+                    "SELECT user_id FROM course_team_member WHERE team_id=? AND user_id=? AND status='INVITED'",team,id);
+            }
+            case "COURSE_TEAM_JOINED", "COURSE_TEAM_DECLINED" -> add(key,course,
+                action.equals("COURSE_TEAM_JOINED")?"组员已接受邀请，请查看课程团队名单":"组队邀请已被谢绝，请查看课程团队名单","/courses/"+course+"/teams",
+                "SELECT leader_id AS user_id FROM course_team WHERE id=? AND course_id=?",id,course);
             case "PROJECT_PUBLISHED", "PROJECT_REQUIREMENTS_CHANGED" -> add(key,course,
                 action.equals("PROJECT_PUBLISHED") ? "课程项目已发布" : "项目交付要求或截止时间已更新",
                 "/courses/"+course+"/projects/"+id,"SELECT user_id FROM course_membership WHERE course_id=? AND active=TRUE",course);
@@ -109,12 +118,15 @@ public class WorkflowNotices {
 
     public List<Map<String,Object>> list(long user) {
         return db.queryForList("""
-            SELECT n.id,'workflow' AS source,n.title,n.href,n.created_at,n.read_at FROM workflow_notice n
+            SELECT n.id,'workflow' AS source,n.title,n.href,n.created_at,n.read_at,c.name AS course_name,
+                   CAST(NULL AS VARCHAR(160)) AS project_name,CAST(NULL AS VARCHAR(160)) AS team_name
+            FROM workflow_notice n JOIN course c ON c.id=n.course_id
             JOIN course_membership m ON m.course_id=n.course_id AND m.user_id=n.user_id AND m.active=TRUE
             WHERE n.user_id=?
             UNION ALL
-            SELECT n.id,'submission',n.title,CONCAT('/modules/submissions?courseId=',p.course_id,'&teamId=',n.team_id),n.created_at,n.read_at
+            SELECT n.id,'submission',n.title,CONCAT('/modules/submissions?courseId=',p.course_id,'&teamId=',n.team_id),n.created_at,n.read_at,c.name,p.name,t.name
             FROM submission_notice n JOIN project_team t ON t.id=n.team_id JOIN course_project p ON p.id=t.project_id
+            JOIN course c ON c.id=p.course_id
             JOIN course_membership m ON m.course_id=p.course_id AND m.user_id=n.user_id AND m.active=TRUE
             WHERE n.user_id=? AND (m.role='TEACHER' OR EXISTS(SELECT 1 FROM project_team_member tm WHERE tm.team_id=t.id AND tm.user_id=n.user_id AND tm.active=TRUE))
             ORDER BY created_at DESC,id DESC LIMIT 200

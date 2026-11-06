@@ -193,6 +193,23 @@ public class TeamService {
         return detail(userId,courseId,projectId,teamId);
     }
 
+    public List<Map<String,Object>> assignmentCandidates(Long userId,Long courseId,Long projectId,Long teamId) {
+        permission.requireTeacher(userId,courseId);
+        var project=findProject(courseId,projectId);
+        requireMembershipChangesAllowed(project);
+        findTeam(projectId,teamId);
+        return db.queryForList("""
+            SELECT u.id,u.display_name,u.username FROM course_membership c JOIN app_user u ON u.id=c.user_id
+            WHERE c.course_id=? AND c.role='STUDENT' AND c.active=TRUE AND u.enabled=TRUE
+            AND NOT EXISTS (
+                SELECT 1 FROM project_team_member m JOIN project_team t ON t.id=m.team_id
+                WHERE t.project_id=? AND m.user_id=u.id
+                AND (m.status='ACTIVE' OR (m.status='PENDING' AND t.id<>?))
+            )
+            ORDER BY u.display_name,u.username
+            """,courseId,projectId,teamId);
+    }
+
     public GroupingWindow window(Long userId,Long courseId,Long projectId){
         permission.requireMember(userId,courseId);
         var project=findProject(courseId,projectId);
@@ -282,11 +299,17 @@ public class TeamService {
             throw new BusinessException(HttpStatus.FORBIDDEN,"STUDENT_REQUIRED","仅本课程学生可以建队或申请加入团队");
     }
     private void requireMembershipChangesAllowed(Project project) {
+        requireLegacyGrouping(project.getCourseId());
         if (!java.util.Set.of(ProjectStatus.PUBLISHED, ProjectStatus.IN_PROGRESS).contains(project.getStatus()))
             throw bad("当前项目状态不允许变更团队成员");
     }
 
+    private void requireLegacyGrouping(long course) {
+        if(Boolean.TRUE.equals(db.queryForObject("SELECT course_team_enabled FROM course WHERE id=?",Boolean.class,course))) throw bad("请在课程的组队与选题页面管理固定团队，项目内不再单独组队或调整成员");
+    }
+
     private Project requireGroupingOpen(Long courseId, Long projectId) {
+        requireLegacyGrouping(courseId);
         var project = findProject(courseId, projectId);
         if (project.getStatus() != ProjectStatus.PUBLISHED && project.getStatus() != ProjectStatus.IN_PROGRESS)
             throw bad("仅已发布的项目可以组队");
@@ -355,8 +378,9 @@ public class TeamService {
     }
 
     private void requireLeaderOrTeacher(Long userId, Long courseId, Team team) {
+        requireLegacyGrouping(courseId);
         var role = permission.requireMember(userId, courseId);
-        if (role != CourseRole.TEACHER && !team.getLeaderId().equals(userId))
+        if (role != CourseRole.TEACHER && !(role == CourseRole.STUDENT && team.getLeaderId().equals(userId) && members.findByTeamIdAndUserId(team.getId(), userId).map(m -> m.getStatus() == MemberStatus.ACTIVE).orElse(false)))
             throw new BusinessException(HttpStatus.FORBIDDEN, "TEAM_FORBIDDEN", "仅团队负责人或课程教师可执行此操作");
     }
 
@@ -394,12 +418,13 @@ public class TeamService {
     private TeamView view(Team t, Project project, CourseRole role, Long me, List<TeamMember> ms, Map<Long, String> names) {
         var active = ms.stream().filter(m -> m.getStatus() == MemberStatus.ACTIVE).toList();
         var pending = ms.stream().filter(m -> m.getStatus() == MemberStatus.PENDING).toList();
-        boolean canManage = role == CourseRole.TEACHER || t.getLeaderId().equals(me);
+        boolean fixed=Boolean.TRUE.equals(db.queryForObject("SELECT course_team_enabled FROM course WHERE id=?",Boolean.class,project.getCourseId()));
+        boolean canManage = !fixed && (role == CourseRole.TEACHER || (role == CourseRole.STUDENT && t.getLeaderId().equals(me) && active.stream().anyMatch(m -> m.getUserId().equals(me))));
         return new TeamView(t.getId(), t.getProjectId(), t.getName(), t.getLeaderId(), names.get(t.getLeaderId()),
             active.size(), project.getMinTeamSize(), project.getMaxTeamSize(),
             active.size() >= project.getMaxTeamSize(), active.size() >= project.getMinTeamSize(),
             toViews(active, names), toViews(groupingOpen(project)?pending:List.of(), names), role, canManage,
-            groupingOpen(project),shift(project.getGroupingOpensAt()),shift(project.getGroupingClosesAt()));
+            !fixed && groupingOpen(project),shift(project.getGroupingOpensAt()),shift(project.getGroupingClosesAt()),fixed);
     }
 
     private List<MemberView> toViews(Collection<TeamMember> list, Map<Long, String> names) {
@@ -420,5 +445,5 @@ public class TeamService {
     public record TeamView(Long id, Long projectId, String name, Long leaderId, String leaderName,
                            int activeCount, int minTeamSize, int maxTeamSize, boolean full, boolean complete,
                            List<MemberView> members, List<MemberView> applications, CourseRole myRole, boolean canManage,
-                           boolean groupingOpen, OffsetDateTime groupingOpensAt, OffsetDateTime groupingClosesAt) {}
+                           boolean groupingOpen, OffsetDateTime groupingOpensAt, OffsetDateTime groupingClosesAt,boolean fixedCourseTeams) {}
 }
