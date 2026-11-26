@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, FolderOpened, User, List, Document, ChatDotRound, Medal, Upload } from '@element-plus/icons-vue'
-import { getCourse, getManagement, getAudit, roleName, type Course, type Audit } from '../api/courses'
-import { getProjects } from '../api/projects'
+import { ArrowLeft, ArrowRight, FolderOpened, User, List, Document, ChatDotRound, Medal } from '@element-plus/icons-vue'
+import { getCourse, getManagement, getAudit, getCourseMembers, roleName, type Course, type CourseMember, type Audit } from '../api/courses'
 const route = useRoute(); const router = useRouter(); const course = ref<Course | null>(null)
 const failed = ref(false); const loading = ref(true); const count = ref<number | null>(null)
 const logs = ref<Audit[]>([]); const showLogs = ref(false); const logsLoading = ref(false)
+const members = ref<CourseMember[]>([])
+const showMembers = ref(false)
+const membersLoading = ref(false)
+const membersFailed = ref(false)
 const modules = [ { key: 'projects', title: '课程项目', desc: '项目要求与交付安排', icon: FolderOpened }, { key: 'teams', title: '组队与选题', desc: '先在课程里组队，再选择项目', icon: User }, { key: 'tasks', title: '迭代与任务', desc: '迭代计划与任务进展', icon: List }, { key: 'submissions', title: '成果与版本', desc: '正式提交与最终版本', icon: Document }, { key: 'reviews', title: '检查与互评', desc: '过程检查与评审反馈', icon: ChatDotRound }, { key: 'grades', title: '评分与成绩', desc: '评分、发布与结果查询', icon: Medal } ]
 async function openModule(m: { key: string }) {
   if (!course.value) return
@@ -20,12 +23,56 @@ onMounted(async () => {
   catch { failed.value = true } finally { loading.value = false }
 })
 async function audit() { if (!course.value) return; logsLoading.value = true; try { logs.value = (await getAudit(course.value.id)).items; showLogs.value = true } catch {} finally { logsLoading.value = false } }
+async function openMembers() {
+  if (!course.value || membersLoading.value) return
+  showMembers.value = true
+  membersLoading.value = true
+  membersFailed.value = false
+  members.value = []
+  try {
+    members.value = await getCourseMembers(course.value.id)
+    count.value = members.value.filter(member => member.role === 'STUDENT').length
+  } catch {
+    membersFailed.value = true
+  } finally {
+    membersLoading.value = false
+  }
+}
 </script>
 <template>
   <el-button text @click="router.push('/courses')"><ArrowLeft class="button-icon"/>返回我的课程</el-button>
   <div v-if="loading" class="state-panel">正在加载课程…</div><el-empty v-else-if="failed || !course" description="无法访问此课程，请返回课程列表"/>
-  <template v-else><section class="page-heading detail-heading"><div><span class="eyebrow">COURSE WORKSPACE</span><h1>{{ course.name }}</h1><p class="muted">{{ course.semester }} · {{ roleName[course.myRole] }}</p></div><el-button v-if="course.myRole === 'TEACHER'" :loading="logsLoading" @click="audit">查看操作记录</el-button></section><p class="detail-description">{{ course.description }}</p><div v-if="count !== null" class="small-stat"><User/><strong>{{ count }}</strong>名课程学生</div>
+  <template v-else><section class="page-heading detail-heading"><div><span class="eyebrow">COURSE WORKSPACE</span><h1>{{ course.name }}</h1><p class="muted">{{ course.semester }} · {{ roleName[course.myRole] }}</p></div><el-button v-if="course.myRole === 'TEACHER'" :loading="logsLoading" @click="audit">查看操作记录</el-button></section><p class="detail-description">{{ course.description }}</p>
+  <button v-if="count !== null" type="button" class="small-stat roster-trigger" aria-haspopup="dialog" @click="openMembers">
+    <User class="roster-icon" aria-hidden="true"/>
+    <span class="roster-label"><b>课程成员</b><span>{{ count }} 名课程学生</span></span>
+    <ArrowRight class="roster-icon" aria-hidden="true"/>
+  </button>
   <div class="module-grid"><article v-for="m in modules" :key="m.key" class="module-card"><component :is="m.icon"/><h3>{{ m.title }}</h3><p>{{ m.desc }}</p><el-button text type="primary" @click="openModule(m)">进入办理</el-button></article></div>
   <section class="materials-panel"><h2>从课程项目开始</h2><p class="muted">先选择课程项目，再进入团队、迭代、成果与评价。团队材料在“成果与版本”中准备，正式提交会生成可追溯的版本和回执。</p><el-button type="primary" @click="openModule({key:'projects'})">选择课程项目</el-button></section>
+  <el-dialog v-model="showMembers" :title="`${course.name} · 课程成员`" width="min(720px, 92vw)">
+    <div v-if="membersLoading" class="state-panel" role="status">正在加载课程成员…</div>
+    <div v-else-if="membersFailed" class="state-panel"><p>课程成员加载失败。</p><el-button @click="openMembers">重试</el-button></div>
+    <el-table v-else :data="members" max-height="min(55vh, 480px)" row-key="username" empty-text="暂无课程成员">
+      <el-table-column prop="displayName" label="姓名" min-width="110"/>
+      <el-table-column prop="username" label="登录名" min-width="140"/>
+      <el-table-column label="课程角色" min-width="100"><template #default="{ row }">{{ roleName[row.role as CourseMember['role']] }}</template></el-table-column>
+    </el-table>
+  </el-dialog>
   <el-dialog v-model="showLogs" title="课程操作记录" width="min(720px, 92vw)"><el-empty v-if="!logs.length" description="暂无操作记录"/><div v-for="log in logs" :key="log.id" class="audit-row"><strong>{{ log.summary }}</strong><span>{{ log.occurredAt }} · 操作者 #{{ log.actorId }}</span></div></el-dialog></template>
 </template>
+
+<style scoped>
+.roster-trigger {
+  border: 1px solid #dce9e4;
+  cursor: pointer;
+  color: #426c5d;
+  text-align: left;
+  gap: 12px;
+}
+.roster-trigger:hover { background: #deeee8; }
+.roster-trigger:focus-visible { outline: 2px solid #167d78; outline-offset: 3px; }
+.roster-label { display: grid; gap: 3px; }
+.roster-label b { font-size: 14px; }
+.roster-icon { width: 18px; height: 18px; }
+</style>

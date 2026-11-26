@@ -5,7 +5,9 @@ import cn.edu.school.auth.UserPrincipal;
 import cn.edu.school.common.ApiResponse;
 import cn.edu.school.common.BusinessException;
 import cn.edu.school.course.CourseRole;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -107,23 +109,61 @@ public class PlatformDirectory {
     @Transactional
     public ApiResponse<?> membership(@AuthenticationPrincipal UserPrincipal user,@RequestBody MembershipInput in) {
         requireAdmin(user);
-        if(in.role()==null||db.queryForList("SELECT id FROM course WHERE id=? AND status='ACTIVE' FOR UPDATE",in.courseId()).isEmpty()
-            ||db.queryForObject("SELECT COUNT(*) FROM app_user WHERE id=? AND enabled=TRUE",Long.class,in.userId())!=1)
-            throw invalid("请选择有效课程、启用的用户和角色");
+        lockActiveCourse(in.courseId());
+        if (in.role()==null || !enabledUser(in.userId())) throw invalid("请选择启用的用户和角色");
         if ((!in.active() || in.role()!=CourseRole.STUDENT) && db.queryForObject("""
             SELECT COUNT(*) FROM project_team_member m JOIN project_team t ON t.id=m.team_id
             JOIN course_project p ON p.id=t.project_id WHERE p.course_id=? AND m.user_id=? AND m.active=TRUE
             """,Long.class,in.courseId(),in.userId())>0) throw invalid("请先处理该学生的有效团队归属");
-        int updated=db.update("UPDATE course_membership SET role=?,active=? WHERE course_id=? AND user_id=?",
-            in.role().name(),in.active(),in.courseId(),in.userId());
-        if(updated==0)db.update("INSERT INTO course_membership(role,active,course_id,user_id) VALUES(?,?,?,?)",
-            in.role().name(),in.active(),in.courseId(),in.userId());
+        saveMembership(user,in);
         if(!in.active()||in.role()!=CourseRole.TA)db.update("""
             DELETE FROM assistant_team_scope WHERE user_id=? AND team_id IN (
               SELECT t.id FROM project_team t JOIN course_project p ON p.id=t.project_id WHERE p.course_id=?
             )
             """,in.userId(),in.courseId());
-        audit.append(user.id(),in.courseId(),"COURSE_MEMBERSHIP_UPDATED","user:"+in.userId(),"课程角色 "+in.role()+"，启用 "+in.active());
         return ApiResponse.ok(null);
+    }
+
+    public record BatchStudentsInput(long courseId,List<Long> userIds) {}
+
+    @PostMapping("/memberships/students/batch")
+    @Transactional
+    public ApiResponse<?> addStudents(@AuthenticationPrincipal UserPrincipal user,@RequestBody BatchStudentsInput in) {
+        requireAdmin(user);
+        if (in.userIds()==null || in.userIds().isEmpty() || in.userIds().stream().anyMatch(Objects::isNull))
+            throw invalid("请至少选择一名有效用户");
+        lockActiveCourse(in.courseId());
+        int added=0;
+        for (long userId : in.userIds().stream().distinct().toList()) {
+            if (!enabledUser(userId)) throw invalid("所选账号中有账号已停用或不存在，请刷新名单");
+            var existing=db.queryForList("SELECT role,active FROM course_membership WHERE course_id=? AND user_id=?",
+                in.courseId(),userId);
+            if (!existing.isEmpty()) {
+                var membership=existing.getFirst();
+                if (!CourseRole.STUDENT.name().equals(membership.get("role")))
+                    throw invalid("所选账号中有本课程教师或助教，请刷新名单");
+                if (Boolean.TRUE.equals(membership.get("active"))) continue;
+            }
+            saveMembership(user,new MembershipInput(in.courseId(),userId,CourseRole.STUDENT,true));
+            added++;
+        }
+        return ApiResponse.ok(Map.of("added",added));
+    }
+
+    private void lockActiveCourse(long courseId) {
+        if (db.queryForList("SELECT id FROM course WHERE id=? AND status='ACTIVE' FOR UPDATE",courseId).isEmpty())
+            throw invalid("请选择进行中的课程");
+    }
+
+    private boolean enabledUser(long userId) {
+        return db.queryForObject("SELECT COUNT(*) FROM app_user WHERE id=? AND enabled=TRUE",Long.class,userId)==1;
+    }
+
+    private void saveMembership(UserPrincipal user,MembershipInput in) {
+        int updated=db.update("UPDATE course_membership SET role=?,active=? WHERE course_id=? AND user_id=?",
+            in.role().name(),in.active(),in.courseId(),in.userId());
+        if (updated==0) db.update("INSERT INTO course_membership(role,active,course_id,user_id) VALUES(?,?,?,?)",
+            in.role().name(),in.active(),in.courseId(),in.userId());
+        audit.append(user.id(),in.courseId(),"COURSE_MEMBERSHIP_UPDATED","user:"+in.userId(),"课程角色 "+in.role()+"，启用 "+in.active());
     }
 }

@@ -5,5 +5,7 @@ export const roleName: Record<CourseRole, string> = { TEACHER: '任课教师', S
 export const getCourses = () => request<Course[]>('/courses')
 export const getCourse = (id: number) => request<Course>(`/courses/${id}`)
 export const getManagement = (id: number) => request<{ courseId: number; studentCount: number }>(`/courses/${id}/management`)
+export interface CourseMember { displayName: string; username: string; role: CourseRole }
+export const getCourseMembers = (id: number) => request<CourseMember[]>(`/courses/${id}/members`)
 export interface Audit { id: number; actorId: number; action: string; objectId: string; summary: string; occurredAt: string }
 export const getAudit = (id: number) => request<{ items: Audit[]; total: number }>(`/courses/${id}/audit`)

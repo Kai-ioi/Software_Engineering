@@ -25,6 +25,15 @@ public class CourseService {
         permission.requireTeacher(userId,id);
         return new ManagementView(id,memberships.countByCourseIdAndRoleAndActiveTrue(id,CourseRole.STUDENT));
     }
+
+    public List<MemberView> roster(Long userId, Long courseId) {
+        permission.requireTeacher(userId, courseId);
+        return memberships.findByCourseIdAndActiveTrueOrderByRoleAscUserDisplayNameAscIdAsc(courseId).stream()
+            .map(m -> new MemberView(m.getUser().getDisplayName(), m.getUser().getUsername(), m.getRole()))
+            .toList();
+    }
+
+    public record MemberView(String displayName, String username, CourseRole role) {}
     private CourseView view(Course c,CourseRole role){return new CourseView(c.getId(),c.getName(),c.getSemester(),c.getDescription(),c.getStatus(),role);}
     public record CourseView(Long id,String name,String semester,String description,String status,CourseRole myRole){}
     public record ManagementView(Long courseId,long studentCount){}

@@ -11,4 +11,9 @@ public class CourseController {
     @GetMapping public ApiResponse<List<CourseService.CourseView>> list(@AuthenticationPrincipal UserPrincipal user){return ApiResponse.ok(service.list(user.id()));}
     @GetMapping("/{id}") public ApiResponse<CourseService.CourseView> detail(@AuthenticationPrincipal UserPrincipal user,@PathVariable Long id){return ApiResponse.ok(service.detail(user.id(),id));}
     @GetMapping("/{id}/management") public ApiResponse<CourseService.ManagementView> management(@AuthenticationPrincipal UserPrincipal user,@PathVariable Long id){return ApiResponse.ok(service.management(user.id(),id));}
+
+    @GetMapping("/{id}/members")
+    public ApiResponse<List<CourseService.MemberView>> members(@AuthenticationPrincipal UserPrincipal user, @PathVariable Long id) {
+        return ApiResponse.ok(service.roster(user.id(), id));
+    }
 }
