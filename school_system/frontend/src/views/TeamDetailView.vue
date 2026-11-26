@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { request } from '../api/http'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, User, List } from '@element-plus/icons-vue'
@@ -12,6 +12,12 @@ const courseId = Number(route.params.courseId)
 const projectId = Number(route.params.projectId)
 const teamId = Number(route.params.teamId)
 const team = ref<Team | null>(null)
+const memberSection = ref<HTMLElement | null>(null)
+const fromCourseTeams = route.query.from === 'course-teams'
+
+function backToTeams() {
+  void router.push(fromCourseTeams ? `/courses/${courseId}/teams` : `/courses/${courseId}/projects/${projectId}/teams`)
+}
 const assistants = ref<{ id: number; display_name: string; granted: boolean }[]>([])
 const scopePath = `/inspections/teams/${teamId}/assistant-scope`
 const scopeOpen = ref(false)
@@ -40,6 +46,11 @@ async function load() {
     team.value = await getTeam(courseId, projectId, teamId)
     allTeams.value = await getTeams(courseId, projectId)
   } catch { failed.value = true } finally { loading.value = false }
+  if (!failed.value && route.hash === '#team-members') {
+    await nextTick()
+    memberSection.value?.focus({ preventScroll: true })
+    memberSection.value?.scrollIntoView({ block: 'start' })
+  }
 }
 
 const me = () => auth.user?.id
@@ -104,7 +115,7 @@ const statusText = (): string => team.value ? (team.value.full ? '已满员' : t
 </script>
 
 <template>
-  <el-button text @click="router.push(`/courses/${courseId}/projects/${projectId}/teams`)"><ArrowLeft class="button-icon"/>返回团队列表</el-button>
+  <el-button text @click="backToTeams"><ArrowLeft class="button-icon"/>{{ fromCourseTeams ? '返回组队与选题' : '返回团队列表' }}</el-button>
   <div v-if="loading" class="state-panel">正在加载团队…</div>
   <el-empty v-else-if="failed || !team" description="无法访问该团队，请返回团队列表"/>
 
@@ -116,7 +127,7 @@ const statusText = (): string => team.value ? (team.value.full ? '已满员' : t
 
     <el-alert v-if="team.fixedCourseTeams" type="info" :closable="false" title="本课程采用固定团队。组队、邀请及选题请进入“组队与选题”；各项目不再单独调整成员。"/>
     <section class="team-next-actions"><div><h2>团队工作入口</h2><p class="muted">继续处理本团队的协作与成果，进入后保留当前项目和团队。</p></div><div><el-button type="primary" @click="router.push({path:'/modules/tasks',query:{courseId,projectId,teamId}})">迭代与任务</el-button><el-button @click="router.push({path:'/modules/submissions',query:{courseId,projectId,teamId}})">成果与版本</el-button><el-button @click="router.push({path:'/modules/reviews',query:{courseId,projectId,teamId,tab:'inspection'}})">检查与整改</el-button></div></section>
-    <div class="detail-panel">
+    <div id="team-members" ref="memberSection" class="detail-panel" tabindex="-1">
       <div class="detail-section">
         <h3><User/>团队成员（{{ team.members.length }}）</h3>
         <div class="member-list">
