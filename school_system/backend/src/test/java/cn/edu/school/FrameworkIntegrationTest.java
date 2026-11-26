@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ActiveProfiles;
@@ -18,6 +20,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -36,6 +40,7 @@ class FrameworkIntegrationTest {
     @Autowired UserRepository users;
     @Autowired StoredFileRepository files;
     @Autowired AuditRepository audits;
+    @Autowired JdbcTemplate db;
 
     record CsrfSession(MockHttpSession session, String header, String token) {}
 
@@ -121,6 +126,53 @@ class FrameworkIntegrationTest {
         var session = login("admin01");
         mvc.perform(get("/api/courses").session(session)).andExpect(status().isOk()).andExpect(jsonPath("$.data.length()").value(0));
         mvc.perform(get("/api/courses/1").session(session)).andExpect(status().isForbidden());
+    }
+
+    @Test void platformAdminAddsStudentsInOneBatchWithoutDuplicatingOrChangingStaff() throws Exception {
+        String courseName = "批量选课测试-" + UUID.randomUUID();
+        db.update("INSERT INTO course(name,semester,description,status) VALUES(?,?,?,'ACTIVE')", courseName, "测试学期", "");
+        long courseId = db.queryForObject("SELECT id FROM course WHERE name=?", Long.class, courseName);
+        long teacherId = users.findByUsername("teacher01").orElseThrow().getId();
+        long first = users.findByUsername("student01").orElseThrow().getId();
+        long second = users.findByUsername("student03").orElseThrow().getId();
+        long third = users.findByUsername("student04").orElseThrow().getId();
+        var admin = csrf(login("admin01"));
+        mvc.perform(post("/api/platform/directory/memberships").session(admin.session())
+                .header(admin.header(), admin.token()).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("courseId",courseId,"userId",teacherId,"role","TEACHER","active",true))))
+            .andExpect(status().isOk());
+
+        addStudents(admin, courseId, List.of(third, teacherId)).andExpect(status().isBadRequest());
+        assertThat(db.queryForList("SELECT role FROM course_membership WHERE course_id=?", String.class, courseId))
+            .containsExactly("TEACHER");
+        addStudents(csrf(login("teacher01")), courseId, List.of(first)).andExpect(status().isForbidden());
+
+        var students = List.of(first, second, first);
+        addStudents(admin, courseId, students).andExpect(status().isOk()).andExpect(jsonPath("$.data.added").value(2));
+        addStudents(admin, courseId, students).andExpect(status().isOk()).andExpect(jsonPath("$.data.added").value(0));
+        assertThat(db.queryForList("""
+            SELECT user_id FROM course_membership WHERE course_id=? AND role='STUDENT' AND active=TRUE
+            """, Long.class, courseId)).containsExactlyInAnyOrder(first, second);
+        var rosterPath = "/api/courses/" + courseId + "/members";
+        mvc.perform(get(rosterPath).session(login("teacher01"))).andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.length()").value(3))
+            .andExpect(jsonPath("$.data[?(@.username == 'student01' && @.role == 'STUDENT')]").isNotEmpty())
+            .andExpect(jsonPath("$.data[?(@.username == 'student03' && @.role == 'STUDENT')]").isNotEmpty())
+            .andExpect(jsonPath("$.data[?(@.username == 'teacher01' && @.role == 'TEACHER')]").isNotEmpty())
+            .andExpect(jsonPath("$.data[0].displayName").isNotEmpty());
+        var student = login("student03");
+        mvc.perform(get("/api/courses/" + courseId).session(student)).andExpect(status().isOk());
+        mvc.perform(get(rosterPath).session(student)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/courses/2/members").session(login("teacher01"))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/courses/" + courseId).session(login("student04"))).andExpect(status().isForbidden());
+        // Keep the shared demo course fixtures used by the other framework tests independent.
+        db.update("DELETE FROM course_membership WHERE course_id=?", courseId);
+    }
+
+    private org.springframework.test.web.servlet.ResultActions addStudents(CsrfSession auth, long courseId, List<Long> students) throws Exception {
+        return mvc.perform(post("/api/platform/directory/memberships/students/batch").session(auth.session())
+            .header(auth.header(), auth.token()).contentType(MediaType.APPLICATION_JSON)
+            .content(json.writeValueAsString(Map.of("courseId", courseId, "userIds", students))));
     }
 
     @Test void auditIsNotVisibleToStudentsOrTeachingAssistants() throws Exception {
