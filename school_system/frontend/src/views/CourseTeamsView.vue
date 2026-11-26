@@ -5,7 +5,7 @@ import { ElMessage,ElMessageBox } from 'element-plus'
 import { auth } from '../stores/auth'
 import { getCourse,type Course } from '../api/courses'
 import { getProjects,type Project } from '../api/projects'
-import { getCourseTeams,courseTeamAction,getCourseTeamCandidates,type CourseTeamWorkspace } from '../api/courseTeams'
+import { getCourseTeams,courseTeamAction,getCourseTeamCandidates,type CourseTeam, type CourseTeamWorkspace } from '../api/courseTeams'
 import { rememberWorkspace } from '../stores/workspace'
 const route=useRoute(),router=useRouter(),courseId=Number(route.params.courseId)
 const course=ref<Course>(),workspace=ref<CourseTeamWorkspace>(),projects=ref<Project[]>([]),loading=ref(false),busy=ref(false),failed=ref(false)
@@ -16,6 +16,7 @@ const members=computed(()=>mine.value?.members.filter(m=>m.status==='ACTIVE')||[
 const pending=computed(()=>mine.value?.members.filter(m=>m.status==='INVITED')||[])
 const canSelect=computed(()=>leader.value&&members.value.length>=3&&members.value.length<=5&&!pending.value.length&&!mine.value?.projects.length)
 const teacher=computed(()=>workspace.value?.role==='TEACHER')
+const rosterOpen=ref(false),rosterTeamId=ref<number>()
 const time=(value:string|null)=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'未设置'
 function unavailable(p:Project){return !['PUBLISHED','IN_PROGRESS'].includes(p.status)?'当前项目不接受选题':!p.deadline||Date.parse(p.deadline)<=Date.now()?'项目已过选题时间':p.criteria.reduce((sum,c)=>sum+c.weight,0)!==100?'评分标准待教师完善':''}
 async function load(){loading.value=true;failed.value=false;try{const [c,w,p]=await Promise.all([getCourse(courseId),getCourseTeams(courseId),getProjects(courseId)]);course.value=c;workspace.value=w;projects.value=p;required.value=w.requiredProjects}catch{failed.value=true}finally{loading.value=false}}
@@ -27,6 +28,25 @@ async function sendInvites(){if(!mine.value||!invitees.value.length)return;busy.
 function toggle(id:number){selected.value=selected.value.includes(id)?selected.value.filter(n=>n!==id):[...selected.value,id]}
 async function choose(){if(!mine.value||!workspace.value)return;try{await ElMessageBox.confirm(`确认由“${mine.value.name}”的${members.value.length}名成员共同完成所选${selected.value.length}个项目？选定后名单和项目固定。`,'确认团队与项目',{confirmButtonText:'确认选题',cancelButtonText:'再检查一下',type:'warning'})}catch{return}if(await act(`/${mine.value.id}/projects`,{projectIds:selected.value},'选题已完成，各项目沿用同一份团队名单'))selected.value=[]}
 function openProject(projectId:number,teamId?:number){rememberWorkspace({courseId,projectId,...(teamId?{teamId}:{})});router.push({path:`/courses/${courseId}/projects/${projectId}`,query:teamId?{teamId}:{}})}
+const activeMembers = (team: CourseTeam) => team.members.filter(member => member.status === 'ACTIVE')
+const rosterTeam = computed(() => workspace.value?.teams.find(team => team.id === rosterTeamId.value))
+const rosterMembers = computed(() => rosterTeam.value ? activeMembers(rosterTeam.value) : [])
+
+function openMembers(team: CourseTeam) {
+  const project = team.projects[0]
+  if (teacher.value && project) {
+    const { project_id: projectId, work_team_id: teamId } = project
+    rememberWorkspace({ courseId, projectId, teamId })
+    void router.push({
+      path: `/courses/${courseId}/projects/${projectId}/teams/${teamId}`,
+      query: { from: 'course-teams' },
+      hash: '#team-members',
+    })
+    return
+  }
+  rosterTeamId.value = team.id
+  rosterOpen.value = true
+}
 </script>
 <template>
  <section class="page-heading"><div><span class="eyebrow">课程固定团队</span><h1>组队与选题</h1><p class="muted">{{course?.name}} · 先确认组员，再由组长选择项目。同一课程每人只加入一个团队。</p></div><el-button :loading="loading" @click="load">刷新</el-button></section>
@@ -41,12 +61,46 @@ function openProject(projectId:number,teamId?:number){rememberWorkspace({courseI
    <div v-if="mine.projects.length" class="chosen-projects"><article v-for="p in mine.projects" :key="p.project_id"><h3>{{p.title}}</h3><p class="muted">本项目使用「{{mine.name}}」的固定成员名单</p><el-button type="primary" @click="openProject(p.project_id,p.work_team_id)">进入项目工作台</el-button></article></div>
   </section>
   <section v-else-if="workspace.role==='STUDENT'" class="detail-panel"><h2>先和同学商量好团队及组长</h2><p class="muted">如果你是组长，创建团队并邀请组员；如果你是组员，等待组长邀请并在本页确认。创建团队后无需在第二个项目重新组队。</p><el-button type="primary" :disabled="busy||!!workspace.invitations.length" @click="createOpen=true">我是组长，创建课程团队</el-button></section>
-  <section v-if="teacher||workspace.role==='TA'" class="detail-panel"><h2>课程团队与选题进度</h2><el-empty v-if="!workspace.teams.length" description="尚无课程团队，学生可先组队并接受邀请"/><el-table v-else :data="workspace.teams"><el-table-column prop="name" label="团队"/><el-table-column prop="leader_name" label="组长"/><el-table-column label="已确认人数"><template #default="{row}">{{row.members.filter((m:any)=>m.status==='ACTIVE').length}} / 5</template></el-table-column><el-table-column label="已选项目"><template #default="{row}">{{row.projects.length}} / {{workspace.requiredProjects}}<p v-for="p in row.projects" :key="p.project_id"><el-button text @click="openProject(p.project_id,p.work_team_id)">{{p.title}}</el-button></p></template></el-table-column></el-table></section>
+  <section v-if="teacher || workspace.role === 'TA'" class="detail-panel">
+    <h2>课程团队与选题进度</h2>
+    <el-empty v-if="!workspace.teams.length" description="尚无课程团队，学生可先组队并接受邀请"/>
+    <el-table v-else :data="workspace.teams">
+      <el-table-column label="团队" min-width="140">
+        <template #default="{ row }">
+          <span>{{ row.name }}</span>
+          <el-button link type="primary" :aria-label="`查看${row.name}成员`" @click="openMembers(row)">查看成员</el-button>
+        </template>
+      </el-table-column>
+      <el-table-column prop="leader_name" label="组长" min-width="90"/>
+      <el-table-column label="已确认人数" min-width="110">
+        <template #default="{ row }">{{ activeMembers(row).length }} / {{ workspace.maxSize }}</template>
+      </el-table-column>
+      <el-table-column label="已选项目" min-width="220">
+        <template #default="{ row }">
+          {{ row.projects.length }} / {{ workspace.requiredProjects }}
+          <div v-for="project in row.projects" :key="project.project_id">
+            <el-button link class="team-project-link" @click="openProject(project.project_id, project.work_team_id)">
+              {{ project.title }}
+            </el-button>
+          </div>
+        </template>
+      </el-table-column>
+    </el-table>
+  </section>
   <section v-if="mine&&!mine.projects.length"><div class="section-toolbar"><div><h2>选择团队项目</h2><p class="muted">{{leader?'选满规定数量后统一确认。':'由组长统一选择，全体组员共同完成。'}}</p></div><el-button v-if="leader" type="primary" :loading="busy" :disabled="!canSelect||selected.length!==workspace.requiredProjects" @click="choose">确认选择（{{selected.length}} / {{workspace.requiredProjects}}）</el-button></div><div class="project-grid"><article v-for="p in projects" :key="p.id" class="project-card"><div class="journey-heading"><h3>{{p.title}}</h3><el-checkbox v-if="leader" :model-value="selected.includes(p.id)" :aria-label="`选择项目 ${p.title}`" :disabled="busy||!canSelect||!!unavailable(p)||(!selected.includes(p.id)&&selected.length>=workspace.requiredProjects)" @change="toggle(p.id)"/></div><p class="project-desc">{{p.description}}</p><p class="muted">截止 {{time(p.deadline)}}</p><p v-if="unavailable(p)" class="selection-reason">{{unavailable(p)}}</p><el-button text type="primary" @click="openProject(p.id)">查看完整要求</el-button></article></div></section>
  </template>
+ <el-dialog v-model="rosterOpen" :title="`${rosterTeam?.name ?? ''} · 团队成员`" width="min(520px, 94vw)">
+   <el-table :data="rosterMembers" row-key="id" empty-text="暂无已确认成员">
+     <el-table-column prop="display_name" label="姓名"/>
+     <el-table-column label="队内角色">
+       <template #default="{ row }">{{ row.user_id === rosterTeam?.leader_id ? '组长' : '组员' }}</template>
+     </el-table-column>
+   </el-table>
+ </el-dialog>
  <el-dialog v-model="createOpen" title="创建课程团队" width="min(520px,94vw)"><p class="muted">创建者成为组长；同一团队将用于本课程所选的全部项目。</p><el-input v-model="name" aria-label="课程团队名称" @keyup.enter="create" maxlength="160" show-word-limit placeholder="例如：基因重组队"/><template #footer><el-button @click="createOpen=false">取消</el-button><el-button type="primary" :loading="busy" @click="create">创建并邀请组员</el-button></template></el-dialog>
  <el-dialog v-model="inviteOpen" title="邀请本课程的同学" width="min(580px,94vw)"><p class="muted">只显示尚未加入团队且没有待确认邀请的课程学生。接受邀请后才成为正式组员。</p><el-select v-model="invitees" multiple filterable style="width:100%" placeholder="搜索姓名或账号，选择邀请对象" :multiple-limit="5-members.length-pending.length"><el-option v-for="s in candidates" :key="s.id" :value="s.id" :label="`${s.display_name}（${s.username}）`"/></el-select><el-empty v-if="!candidates.length" description="暂无可邀请学生"/><template #footer><el-button @click="inviteOpen=false">取消</el-button><el-button type="primary" :loading="busy" :disabled="!invitees.length" @click="sendInvites">发送邀请</el-button></template></el-dialog>
 </template>
 <style scoped>
 .selection-policy{padding:24px;background:#eaf4ef;border:1px solid #d6e8de;border-radius:12px;margin-bottom:22px}.selection-policy h2,.detail-panel h2{font-size:19px;margin-bottom:12px}.selection-policy p{line-height:1.9;font-size:14px}.policy-edit{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:16px}.policy-edit small{color:#667b74}.selection-steps{display:flex;gap:12px;flex-wrap:wrap;margin:20px 0}.selection-steps span{padding:9px 14px;background:#eef1f3;border-radius:7px;font-size:13px;color:#63747a}.selection-steps .done{background:#dcefe5;color:#256e53}.chosen-projects{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:22px}.chosen-projects article{padding:20px;border:1px solid #dce7e3;border-radius:8px}.chosen-projects h3{margin-bottom:10px}.selection-reason{font-size:13px;color:#a05e32}.detail-panel .el-button{margin-top:10px}.project-card h3{font-size:17px}@media(max-width:760px){.chosen-projects{grid-template-columns:1fr}.section-toolbar{align-items:flex-start;flex-direction:column}}
+.team-project-link { max-width: 100%; height: auto; padding: 0; white-space: normal; text-align: left; line-height: 1.5; }
 </style>
