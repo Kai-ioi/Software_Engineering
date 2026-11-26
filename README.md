@@ -6,6 +6,19 @@
 
 测试账户和密码如下：
 
+| 登录名 | 姓名 | 密码记录 |
+| --- | --- | --- |
+| admin01 | 平台管理员 | jcDC1dpMBogiL0v2LeOZSqP5 |
+| teacher01 | 郭立君 | hlKAHweQIafcyG6S-aw0yvCp |
+| teacher02 | 钮俊 | 12345678 |
+| assistant01 | 周助教 | JacHPui6MMDH3NjQi651LX5B |
+| student01 | 石洁燃 | LJQ7fFaI387l_REshculwx6p |
+| student03 | 未宁夏 | \_VRm1BIcGqEs7Cgq9xn0fU7X |
+| student05 | 陈爽 | zBci4vIZlxSVGynEkic0acFQ |
+| student06 | 汪欣芸 | 0ZkwKnHXkOea8zF_i3F9gVO9 |
+| student07 | 周子涵 | 0ktSo0qtm5Yii4dd9iKWJs-B |
+| student08 | 林予安 | R_F1expbXoSTZZRwQEQx7dAs |
+
 使用项目组单独提供的账号和密码登录，在「我的课程」选择 **`软件工程_2024级1班`**，核验项目 **校园失物招领系统需求与设计**。
 
 | 操作 | 核验点 |
